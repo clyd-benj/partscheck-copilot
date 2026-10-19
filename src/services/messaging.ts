@@ -1,6 +1,6 @@
 import type { AddCustomerResult } from '@/storage/customerDb';
 import type { CustomerRecord } from '@/types/customer';
-import type { PartFitment, Vehicle, VehicleSession } from '@/types/asacaps';
+import type { PartFitment, Settings, Vehicle, VehicleSession } from '@/types/asacaps';
 
 /**
  * Content scripts run in the host page's origin (PartsCheck or ASA CAPS),
@@ -17,6 +17,8 @@ const RUN_BACKUP_NOW_MESSAGE_TYPE = 'RUN_BACKUP_NOW';
 const GET_ACTIVE_VEHICLE_STATE_MESSAGE_TYPE = 'GET_ACTIVE_VEHICLE_STATE';
 const SET_VEHICLE_MANUALLY_MESSAGE_TYPE = 'SET_VEHICLE_MANUALLY';
 const CLOSE_ACTIVE_SESSION_MESSAGE_TYPE = 'CLOSE_ACTIVE_SESSION';
+const GET_SETTINGS_MESSAGE_TYPE = 'GET_SETTINGS';
+const SET_CAPTURE_ENABLED_MESSAGE_TYPE = 'SET_CAPTURE_ENABLED';
 
 interface GetCustomersMessage {
   type: typeof GET_CUSTOMERS_MESSAGE_TYPE;
@@ -49,6 +51,15 @@ interface CloseActiveSessionMessage {
   type: typeof CLOSE_ACTIVE_SESSION_MESSAGE_TYPE;
 }
 
+interface GetSettingsMessage {
+  type: typeof GET_SETTINGS_MESSAGE_TYPE;
+}
+
+interface SetCaptureEnabledMessage {
+  type: typeof SET_CAPTURE_ENABLED_MESSAGE_TYPE;
+  captureEnabled: boolean;
+}
+
 export type RuntimeMessage =
   | GetCustomersMessage
   | AddCustomerMessage
@@ -56,7 +67,9 @@ export type RuntimeMessage =
   | RunBackupNowMessage
   | GetActiveVehicleStateMessage
   | SetVehicleManuallyMessage
-  | CloseActiveSessionMessage;
+  | CloseActiveSessionMessage
+  | GetSettingsMessage
+  | SetCaptureEnabledMessage;
 
 function hasType(message: unknown, type: string): boolean {
   return typeof message === 'object' && message !== null && (message as { type?: unknown }).type === type;
@@ -88,6 +101,14 @@ export function isSetVehicleManuallyMessage(message: unknown): message is SetVeh
 
 export function isCloseActiveSessionMessage(message: unknown): message is CloseActiveSessionMessage {
   return hasType(message, CLOSE_ACTIVE_SESSION_MESSAGE_TYPE);
+}
+
+export function isGetSettingsMessage(message: unknown): message is GetSettingsMessage {
+  return hasType(message, GET_SETTINGS_MESSAGE_TYPE);
+}
+
+export function isSetCaptureEnabledMessage(message: unknown): message is SetCaptureEnabledMessage {
+  return hasType(message, SET_CAPTURE_ENABLED_MESSAGE_TYPE);
 }
 
 // --- Customer database (content script ↔ background) ---
@@ -139,4 +160,16 @@ export async function requestSetVehicleManually(vin: string): Promise<SetVehicle
 export async function requestCloseActiveSession(): Promise<void> {
   const message: CloseActiveSessionMessage = { type: CLOSE_ACTIVE_SESSION_MESSAGE_TYPE };
   await chrome.runtime.sendMessage(message);
+}
+
+export async function requestSettings(): Promise<Settings> {
+  const message: GetSettingsMessage = { type: GET_SETTINGS_MESSAGE_TYPE };
+  const response = (await chrome.runtime.sendMessage(message)) as Settings | undefined;
+  return response ?? { logUnknownEvents: false, captureEnabled: true, debugMode: false };
+}
+
+export async function requestSetCaptureEnabled(captureEnabled: boolean): Promise<Settings> {
+  const message: SetCaptureEnabledMessage = { type: SET_CAPTURE_ENABLED_MESSAGE_TYPE, captureEnabled };
+  const response = (await chrome.runtime.sendMessage(message)) as Settings | undefined;
+  return response ?? { logUnknownEvents: false, captureEnabled, debugMode: false };
 }

@@ -8,7 +8,9 @@ import {
   isCloseActiveSessionMessage,
   isGetActiveVehicleStateMessage,
   isGetCustomersMessage,
+  isGetSettingsMessage,
   isRunBackupNowMessage,
+  isSetCaptureEnabledMessage,
   isSetVehicleManuallyMessage,
   type ActiveVehicleState,
 } from '@/services/messaging';
@@ -205,6 +207,21 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     closeActiveSession()
       .then(() => broadcastStateUpdated())
       .finally(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (isGetSettingsMessage(message)) {
+    AsaCapsDatabase.getSettings().then(sendResponse);
+    return true;
+  }
+
+  if (isSetCaptureEnabledMessage(message)) {
+    AsaCapsDatabase.getSettings()
+      .then((settings) => {
+        const updated = { ...settings, captureEnabled: message.captureEnabled };
+        return AsaCapsDatabase.putSettings(updated).then(() => updated);
+      })
+      .then(sendResponse);
     return true;
   }
 
