@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "ASA CAPS VIN → Part Number Catalogue",
+  "version": "0.1.0",
+  "description": "Passively builds a local VIN-to-part-number catalogue while you work in ASA CAPS. Everything stays on your machine.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "dist/popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "dist/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.myasaweb.com/*", "*://*.asacaps.com/*"],
+      "js": ["dist/content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "permissions": ["storage", "notifications", "clipboardRead", "alarms", "offscreen"],
+  "host_permissions": ["*://*.myasaweb.com/*", "*://*.asacaps.com/*"]
+}

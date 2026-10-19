@@ -1,0 +1,287 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: #1a1a1a;
+  background: #fafafa;
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn {
+  padding: 7px 14px;
+  border: 1px solid #ccc;
+  background: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn:hover {
+  background: #f0f0f0;
+}
+
+.import-status {
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+
+.import-status.success {
+  background: #eafaf0;
+  border: 1px solid #b7e8c8;
+  color: #1e6b3c;
+}
+
+.import-status.error {
+  background: #fdecea;
+  border: 1px solid #f3b8b3;
+  color: #a4262c;
+}
+
+.backup {
+  background: #fff;
+  border: 1px solid #e2e2e2;
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.backup-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.backup h2 {
+  font-size: 14px;
+  margin: 0;
+}
+
+.backup-status-text {
+  font-size: 12px;
+  color: #666;
+  text-align: right;
+}
+
+.backup-hint {
+  color: #888;
+  font-size: 11px;
+  margin: 6px 0 12px 0;
+}
+
+.backup-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.backup-actions .btn {
+  width: auto;
+}
+
+.backup-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+#searchInput {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.result-count {
+  color: #666;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.catalogue-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid #e2e2e2;
+}
+
+.catalogue-table th,
+.catalogue-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid #eee;
+  font-size: 12px;
+}
+
+.catalogue-table th {
+  background: #f4f4f4;
+  color: #555;
+  font-weight: 600;
+}
+
+.catalogue-table td.mono {
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.empty-state {
+  color: #888;
+  font-style: italic;
+  padding: 20px 0;
+  text-align: center;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.grouped-results {
+  margin-bottom: 16px;
+}
+
+.grouped-card {
+  background: #fff;
+  border: 1px solid #e2e2e2;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.grouped-card h3 {
+  margin: 0 0 4px 0;
+  font-size: 15px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.grouped-card .desc {
+  color: #555;
+  margin-bottom: 8px;
+}
+
+.grouped-card .seen-on {
+  font-size: 11px;
+  color: #888;
+  margin-bottom: 4px;
+}
+
+.grouped-card ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+.coverage {
+  background: #fff;
+  border: 1px solid #e2e2e2;
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.coverage-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.coverage h2 {
+  font-size: 14px;
+  margin: 0;
+}
+
+.coverage-summary-text {
+  font-size: 12px;
+  color: #666;
+  white-space: nowrap;
+}
+
+.coverage-hint {
+  color: #888;
+  font-size: 11px;
+  margin: 6px 0 12px 0;
+}
+
+.coverage-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.coverage-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 14px;
+  border: 1px solid #e2e2e2;
+  background: #f7f7f7;
+  font-size: 11px;
+}
+
+.coverage-chip.ready {
+  background: #eafaf0;
+  border-color: #b7e8c8;
+}
+
+.coverage-chip .classification {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-weight: 600;
+}
+
+.coverage-chip .count {
+  color: #666;
+}
+
+.coverage-chip .badge {
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+}
+
+.coverage-chip.ready .badge {
+  background: #2e8b57;
+  color: #fff;
+}
+
+.coverage-chip:not(.ready) .badge {
+  background: #ddd;
+  color: #666;
+}

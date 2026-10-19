@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ASA CAPS Catalogue</title>
+<link rel="stylesheet" href="catalogue.css" />
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>ASA CAPS Catalogue</h1>
+    <div class="header-actions">
+      <button id="btnImportCsv" class="btn">Import CSV</button>
+      <input id="importCsvInput" type="file" accept=".csv,text/csv" class="hidden" />
+      <button id="btnExportCsv" class="btn">Export CSV</button>
+      <button id="btnExportJson" class="btn">Export JSON</button>
+    </div>
+  </header>
+  <div id="importStatus" class="import-status hidden"></div>
+
+  <section class="backup" id="backupSection">
+    <div class="backup-header">
+      <h2>Auto-Backup</h2>
+      <span id="backupStatusText" class="backup-status-text"></span>
+    </div>
+    <p class="backup-hint">
+      Saves an overwriting CSV snapshot to a local folder every hour while Chrome is running.
+      Chrome requires a one-time folder connection — it can't write to your files silently.
+    </p>
+    <div class="backup-actions">
+      <button id="btnConnectBackupFolder" class="btn">Connect Backup Folder</button>
+      <label class="backup-toggle">
+        <input type="checkbox" id="backupEnabledToggle" />
+        <span>Enabled</span>
+      </label>
+      <button id="btnBackupNow" class="btn">Back Up Now</button>
+    </div>
+  </section>
+
+  <section class="coverage" id="coverageSection">
+    <div class="coverage-header">
+      <h2>Catalogue Coverage</h2>
+      <span id="coverageSummaryText" class="coverage-summary-text"></span>
+    </div>
+    <p class="coverage-hint">
+      Matching parts by VIN needs vehicles that share the same trim (classification), not just
+      total VIN count. A trim group is "ready" once it has 20+ vehicles.
+    </p>
+    <div id="coverageGroups" class="coverage-groups"></div>
+    <div id="coverageEmpty" class="empty-state hidden">No vehicles captured yet.</div>
+  </section>
+
+  <div class="search-bar">
+    <input id="searchInput" type="search" placeholder="Search by VIN, part number, make or model..." />
+    <span id="resultCount" class="result-count"></span>
+  </div>
+
+  <div id="groupedResults" class="grouped-results hidden"></div>
+
+  <table class="catalogue-table">
+    <thead>
+      <tr>
+        <th>VIN</th>
+        <th>Vehicle</th>
+        <th>Part Number</th>
+        <th>PNC</th>
+        <th>Description</th>
+        <th>Times Copied</th>
+        <th>First Captured</th>
+        <th>Last Captured</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody"></tbody>
+  </table>
+
+  <div id="emptyState" class="empty-state hidden">No fitments captured yet.</div>
+</div>
+<script src="catalogue.js"></script>
+</body>
+</html>
