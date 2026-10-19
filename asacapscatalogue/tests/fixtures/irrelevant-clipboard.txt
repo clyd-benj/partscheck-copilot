@@ -1,3 +1,0 @@
-Customer: John Smith
-123 Example Street
-0400 000 000

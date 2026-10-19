@@ -23,12 +23,14 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: true,
     rollupOptions: {
-      // Offscreen documents are created dynamically via
-      // chrome.offscreen.createDocument, not referenced by any manifest
-      // field, so CRXJS's manifest scan won't auto-discover this page —
-      // it's declared as an extra build input here instead.
+      // Pages not referenced by any manifest field don't get
+      // auto-discovered by CRXJS's manifest scan, so they're declared as
+      // extra build inputs here: offscreen documents are created
+      // dynamically via chrome.offscreen.createDocument, and the
+      // catalogue page is only ever opened via chrome.tabs.create.
       input: {
         offscreen: 'src/offscreen/index.html',
+        catalogue: 'src/catalogue/index.html',
       },
     },
   },
