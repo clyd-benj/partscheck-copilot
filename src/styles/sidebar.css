@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * This stylesheet is injected only into a sidebar's Shadow DOM (see
+ * src/content/index.tsx and src/content/asacaps.ts), never into the host
+ * page itself, so Tailwind's base reset cannot leak out and alter the
+ * host page's own styles.
+ */
+:host {
+  all: initial;
+}
+
+.pit-root {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, 'Apple Color Emoji', Arial,
+    sans-serif;
+}
