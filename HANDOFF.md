@@ -601,7 +601,7 @@ npm run build      # tsc -b && vite build -> dist/
 npm run dev        # Vite watch mode with HMR; load dist/ as unpacked, refresh on changes
 npm run lint       # eslint . --max-warnings 0
 npm run typecheck  # tsc -b only
-npm test           # vitest run — 16 files, 155 tests, all currently passing
+npm test           # vitest run — 18 files, 203 tests, all currently passing
 npm run test:watch
 npm run format     # prettier --write .
 ```
@@ -850,3 +850,35 @@ suggestions. Rules now:
   free text ×2, a number on a line ERA later answers NA). Replace/add a real Ctrl+S save of
   a repairer-prefilled quote when the user provides one. Tests: `repairer-supplied.test.ts`
   plus updates in quote-rows / quote-capture-watcher.
+
+### 9.6 Build dates in the data and in suggestion ranking
+
+- `src/services/quoteCapture/buildDate.ts` (pure): a **build month** is `year * 12 + month`
+  (1–12), so gaps are plain subtraction. `parseAsaProductionDate("2010.12.3")`,
+  `parsePartsCheckMthYr("6/2022" | "06/2022")`, and `vehicleBuildMonth(vehicle, mthYr)` —
+  ASA CAPS `productionFrom` first (vehicle record by VIN), PartsCheck Mth/Yr as fallback,
+  `undefined` for missing/garbled values (years outside 1950–2100, month outside 1–12, other
+  formats). `formatBuildMonth`/`parseBuildMonthText` use `YYYY-MM` for CSV.
+- **Stored**: every captured QuoteMapping gets `buildMonth` + `buildMonthSource`
+  (`'asacaps' | 'partscheck'`). Quote-only vehicle records (§9.4) have no `productionFrom`,
+  so those fall back to Mth/Yr.
+- **Export**: fitment rows carry `Production From` / `Production To` (ASA format, right after
+  the original 17 columns); quote-mapping rows carry `Build Month` (`YYYY-MM`) and
+  `Build Month Source`. Import reads them only when present — older CSVs still import, and a
+  vehicle's stored dates aren't blanked by a CSV without the columns.
+- **Ranking** (`suggestions.ts`): the quoted vehicle's build month comes from the ASA record by
+  VIN, else the quote's Mth/Yr (the loader now sends `mthYr`; `QuoteVehicle` type). Each
+  candidate has a build month (quote mappings: stored value, else their Mth/Yr for mappings
+  captured before 9.6; catalogue fitments: their vehicle's `productionFrom`). Per suggested
+  part, `buildGap` = smallest |gap| among its **winning-tier** records. Sort order is now:
+  tier → buildGap (undated last) → wording score → vehicle count → times used → recency.
+  It's a ranking factor only, never a filter (Mth/Yr is approximate). Note the user asked for
+  gap *before* wording: a 0.75 "similar wording" match a few months closer will outrank an
+  exact-wording match — revisit (e.g. bucket gaps by year) if that shows up in practice.
+- **Evidence** adds the winning-tier build range after the model — `… · KK1T Triton built
+  2021–2022, last …` (single year shown once) — and ` (older build)` / ` (newer build)` when
+  the nearest build is **more than 24 months** away (possible facelift). The same-VIN tier
+  shows no range (it's the same vehicle). Applies to both "from your quotes" and
+  "from ASA catalogue" suggestions.
+- Tests: `build-date.test.ts`, `build-date-ranking.test.ts`, plus capture/export cases in
+  `quote-mappings.test.ts` and `catalogue-link.test.ts`.
