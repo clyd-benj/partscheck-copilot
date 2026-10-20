@@ -1,3 +1,4 @@
+import { buildYear, parsePartsCheckMthYr } from './buildDate';
 import { normaliseDescription, parseEraSide, parseSide } from './normalise';
 import { POSITION_TOKENS } from './synonyms';
 import type { PartFitment, Vehicle } from '@/types/asacaps';
@@ -13,6 +14,9 @@ import type { QuoteMapping, Side } from '@/types/quoteMapping';
  *  2. "from ASA catalogue" — only for lines source 1 has nothing for:
  *     fitments copied in ASA CAPS whose ASA description matches the line's
  *     wording through the same synonym map.
+ *
+ * Within a vehicle tier, suggestions closest in build date to the quoted
+ * vehicle rank first (a ranking factor, never a filter).
  *
  * Either way a candidate must
  *  - match the wording (identical normalised words, or close enough — see
@@ -37,6 +41,16 @@ export interface SuggestionVehicle {
   model?: string;
   /** From the ASA CAPS catalogue by VIN, if known. */
   modelCode?: string;
+  /** Build month of the vehicle being quoted (see buildDate.ts), if known. */
+  buildMonth?: number;
+}
+
+/** The quoted vehicle as read from the PartsCheck page. */
+export interface QuoteVehicle {
+  vin?: string;
+  model?: string;
+  /** PartsCheck "Mth/Yr", e.g. "6/2022". */
+  mthYr?: string;
 }
 
 export interface SuggestionLine {
@@ -57,6 +71,11 @@ export interface PartSuggestion {
   similarWording?: string;
   /** Distinct vehicles (by VIN, else quote) in the winning tier. */
   vehicleCount: number;
+  /**
+   * Months between the quoted vehicle's build and the nearest build this
+   * part was used on (winning tier); undefined when either side has no date.
+   */
+  buildGap?: number;
   /** Matching records across all tiers. */
   timesUsed: number;
   lastSeen: string;
@@ -96,6 +115,8 @@ interface Candidate {
   model?: string;
   /** What counts as one vehicle when counting evidence. */
   vehicleKey: string;
+  /** Build month of the vehicle this record came from, if known. */
+  buildMonth?: number;
   /** The wording that matched (repairer text for quotes). */
   wording: string;
   description?: string;
@@ -163,6 +184,8 @@ function quoteCandidates(mappings: QuoteMapping[], excludeQuoteKey?: string): Ca
       modelCode: m.modelCode,
       model: m.model,
       vehicleKey: m.vin ?? m.quoteKey,
+      // Mappings captured before build months were stored still have Mth/Yr.
+      buildMonth: m.buildMonth ?? parsePartsCheckMthYr(m.mthYr),
       wording: m.repairerDescription,
       description: m.eraDescription,
       lastSeen: m.lastSeen,
@@ -202,6 +225,41 @@ function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
 }
 
+/** Gaps beyond this many months are flagged: possibly a facelift apart. */
+const FAR_BUILD_GAP_MONTHS = 24;
+
+/** The nearest build in `candidates` to the quoted vehicle, as a signed gap in months. */
+function nearestBuild(
+  vehicle: SuggestionVehicle,
+  candidates: Candidate[],
+): { gap: number; signed: number } | undefined {
+  if (vehicle.buildMonth === undefined) return undefined;
+  let nearest: { gap: number; signed: number } | undefined;
+  for (const candidate of candidates) {
+    if (candidate.buildMonth === undefined) continue;
+    const signed = candidate.buildMonth - vehicle.buildMonth;
+    if (!nearest || Math.abs(signed) < nearest.gap) nearest = { gap: Math.abs(signed), signed };
+  }
+  return nearest;
+}
+
+/** " built 2021–2022 (older build)" — empty when no record has a build date. */
+function describeBuilds(
+  candidates: Candidate[],
+  nearest: { gap: number; signed: number } | undefined,
+): string {
+  const years = candidates
+    .map((c) => c.buildMonth)
+    .filter((month): month is number => month !== undefined)
+    .map(buildYear);
+  if (years.length === 0) return '';
+  const from = Math.min(...years);
+  const to = Math.max(...years);
+  const range = from === to ? ` built ${from}` : ` built ${from}–${to}`;
+  if (!nearest || nearest.gap <= FAR_BUILD_GAP_MONTHS) return range;
+  return `${range} (${nearest.signed < 0 ? 'older' : 'newer'} build)`;
+}
+
 function describeEvidence(
   source: SuggestionSource,
   tier: MatchTier,
@@ -209,6 +267,7 @@ function describeEvidence(
   timesUsed: number,
   lastSeen: string,
   winning: Candidate[],
+  builds: string,
 ): string {
   const verb = source === 'quotes' ? 'used' : 'seen in ASA CAPS';
   const last = `last ${day(lastSeen)}`;
@@ -219,11 +278,11 @@ function describeEvidence(
         ? `used on this vehicle (${plural(timesUsed, 'time')}), ${last}`
         : `seen in ASA CAPS for this vehicle, ${last}`;
     case 'modelCode':
-      return `${verb} on ${plural(vehicleCount, 'vehicle')} · ${`${winning[0].modelCode} ${model}`.trim()}, ${last}`;
+      return `${verb} on ${plural(vehicleCount, 'vehicle')} · ${`${winning[0].modelCode} ${model}`.trim()}${builds}, ${last}`;
     case 'vinPattern':
-      return `${verb} on ${plural(vehicleCount, 'vehicle')} with this VIN pattern · ${model}, ${last}`;
+      return `${verb} on ${plural(vehicleCount, 'vehicle')} with this VIN pattern · ${model}${builds}, ${last}`;
     case 'model':
-      return `${verb} on ${plural(vehicleCount, 'vehicle')} · ${model}, ${last}`;
+      return `${verb} on ${plural(vehicleCount, 'vehicle')} · ${model}${builds}, ${last}`;
   }
 }
 
@@ -250,6 +309,7 @@ function rank(
     const tier = TIER_ORDER.find((t) => hits.some((hit) => hit.tier === t))!;
     const winning = hits.filter((hit) => hit.tier === tier).map((hit) => hit.candidate);
     const vehicleCount = new Set(winning.map((c) => c.vehicleKey)).size;
+    const nearest = nearestBuild(vehicle, winning);
     const best = hits.reduce((a, b) => (b.score > a.score ? b : a));
     const latest = hits.reduce((a, b) =>
       b.candidate.lastSeen > a.candidate.lastSeen ? b : a,
@@ -263,6 +323,7 @@ function rank(
       similarWording:
         best.score < 1 && latest.source === 'quotes' ? best.candidate.wording : undefined,
       vehicleCount,
+      buildGap: nearest?.gap,
       timesUsed: hits.length,
       lastSeen: latest.lastSeen,
       isAccessory: latest.isAccessory,
@@ -273,13 +334,18 @@ function rank(
         hits.length,
         latest.lastSeen,
         winning,
+        describeBuilds(winning, nearest),
       ),
     };
   });
 
+  // Build-date closeness ranks within a tier but never filters: Mth/Yr is
+  // only approximate. Undated suggestions sort after dated ones.
+  const gapOrder = (gap: number | undefined) => gap ?? Number.POSITIVE_INFINITY;
   return suggestions.sort(
     (a, b) =>
       TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier) ||
+      gapOrder(a.buildGap) - gapOrder(b.buildGap) ||
       b.wordingScore - a.wordingScore ||
       b.vehicleCount - a.vehicleCount ||
       b.timesUsed - a.timesUsed ||

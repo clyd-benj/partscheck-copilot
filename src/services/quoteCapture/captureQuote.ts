@@ -9,6 +9,7 @@ import {
 import {
   suggestForLines,
   type LineSuggestions,
+  type QuoteVehicle,
   type SuggestionLine,
   type SuggestionVehicle,
 } from './suggestions';
@@ -76,20 +77,27 @@ export async function captureQuote(
 /**
  * Background-side suggestions for a quote's unfilled lines: past quote
  * mappings first, then the ASA CAPS catalogue's fitments. The vehicle's
- * model code comes from the catalogue when the VIN has been seen there.
+ * model code and build month come from the catalogue when the VIN has been
+ * seen there; the build month falls back to the quote's Mth/Yr.
  */
 export async function suggestForQuote(
-  vehicle: Omit<SuggestionVehicle, 'modelCode'>,
+  vehicle: QuoteVehicle,
   lines: SuggestionLine[],
   excludeQuoteKey?: string,
 ): Promise<LineSuggestions[]> {
   const known = vehicle.vin ? await AsaCapsDatabase.getVehicle(vehicle.vin) : undefined;
+  const query: SuggestionVehicle = {
+    vin: vehicle.vin,
+    model: vehicle.model,
+    modelCode: known?.modelCode,
+    buildMonth: vehicleBuildMonth(known, vehicle.mthYr)?.month,
+  };
   const [mappings, fitments, vehicles] = await Promise.all([
     AsaCapsDatabase.listQuoteMappings(),
     AsaCapsDatabase.listFitments(),
     AsaCapsDatabase.listVehicles(),
   ]);
-  return suggestForLines({ ...vehicle, modelCode: known?.modelCode }, lines, mappings, {
+  return suggestForLines(query, lines, mappings, {
     excludeQuoteKey,
     catalogue: { fitments, vehicles },
   });

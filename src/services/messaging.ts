@@ -2,7 +2,11 @@ import type { AddCustomerResult } from '@/storage/customerDb';
 import type { CustomerRecord } from '@/types/customer';
 import type { PartFitment, Settings, Vehicle, VehicleSession } from '@/types/asacaps';
 import type { QuoteCaptureResult, QuoteContext, QuoteRow } from '@/types/quoteMapping';
-import type { LineSuggestions, SuggestionLine } from '@/services/quoteCapture/suggestions';
+import type {
+  LineSuggestions,
+  QuoteVehicle,
+  SuggestionLine,
+} from '@/services/quoteCapture/suggestions';
 
 /**
  * Content scripts run in the host page's origin (PartsCheck or ASA CAPS),
@@ -72,7 +76,7 @@ interface SaveQuoteCaptureMessage {
 
 interface GetQuoteSuggestionsMessage {
   type: typeof GET_QUOTE_SUGGESTIONS_MESSAGE_TYPE;
-  vehicle: { vin?: string; model?: string };
+  vehicle: QuoteVehicle;
   lines: SuggestionLine[];
   excludeQuoteKey?: string;
 }
@@ -217,7 +221,7 @@ export async function requestSaveQuoteCapture(
 
 /** Ranked part-number suggestions for the given lines; [] if the background couldn't be reached. */
 export async function requestQuoteSuggestions(
-  vehicle: { vin?: string; model?: string },
+  vehicle: QuoteVehicle,
   lines: SuggestionLine[],
   excludeQuoteKey?: string,
 ): Promise<LineSuggestions[]> {

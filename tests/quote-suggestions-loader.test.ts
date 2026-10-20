@@ -15,7 +15,7 @@ describe("loadQuoteSuggestions", () => {
       { id: string; description: string }[],
       string,
     ];
-    expect(vehicle).toEqual({ vin: "MMAGUKS10NH000001", model: "Pajero Sport" });
+    expect(vehicle).toEqual({ vin: "MMAGUKS10NH000001", model: "Pajero Sport", mthYr: "12/2022" });
     expect(lines).toHaveLength(19);
     expect(lines[1]).toEqual({ id: "147735272", description: "L/H/F GUARD" });
     expect(excludeQuoteKey).toBe("draft:10000001");

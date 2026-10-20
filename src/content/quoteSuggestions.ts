@@ -1,6 +1,10 @@
 import { createValueStore, type ValueStore } from './valueStore';
 import { extractQuoteContext, extractQuoteRows } from '@/services/extractors/quoteRows';
-import type { LineSuggestions, SuggestionLine } from '@/services/quoteCapture/suggestions';
+import type {
+  LineSuggestions,
+  QuoteVehicle,
+  SuggestionLine,
+} from '@/services/quoteCapture/suggestions';
 
 /**
  * Asks the background worker for part-number suggestions for the open
@@ -18,7 +22,7 @@ export function createQuoteSuggestionsStore(): QuoteSuggestionsStore {
 }
 
 export type RequestQuoteSuggestions = (
-  vehicle: { vin?: string; model?: string },
+  vehicle: QuoteVehicle,
   lines: SuggestionLine[],
   excludeQuoteKey?: string,
 ) => Promise<LineSuggestions[]>;
@@ -42,7 +46,7 @@ export async function loadQuoteSuggestions(
 
   try {
     const suggested = await request(
-      { vin: context?.vin, model: context?.model },
+      { vin: context?.vin, model: context?.model, mthYr: context?.mthYr },
       lines,
       context?.quoteKey,
     );

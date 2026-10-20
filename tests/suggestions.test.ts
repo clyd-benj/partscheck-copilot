@@ -211,7 +211,7 @@ describe("suggestForQuote — from captured quotes", () => {
     expect(top["R/H/F DOOR WEATHER SHEILD"]).toBe("MZ330934");
     expect(top["R/H/F HUB NUT"]).toBeUndefined();
     expect(result.find((l) => l.description === "R/H/F HUB BEARING")!.suggestions[0].evidence).toBe(
-      "used on 1 vehicle with this VIN pattern · Pajero Sport, last 2026-10-20",
+      "used on 1 vehicle with this VIN pattern · Pajero Sport built 2022, last 2026-10-20",
     );
   });
 
