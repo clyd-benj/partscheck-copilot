@@ -1,4 +1,4 @@
-import { buildYear, parsePartsCheckMthYr } from './buildDate';
+import { buildYear, parseAsaProductionDate, parsePartsCheckMthYr } from './buildDate';
 import { normaliseDescription, parseEraSide, parseSide } from './normalise';
 import { POSITION_TOKENS } from './synonyms';
 import type { PartFitment, Vehicle } from '@/types/asacaps';
@@ -209,6 +209,7 @@ function catalogueCandidates({ fitments, vehicles }: CatalogueData): Candidate[]
         modelCode: vehicle?.modelCode,
         model: vehicle?.model,
         vehicleKey: f.vin,
+        buildMonth: parseAsaProductionDate(vehicle?.productionFrom),
         wording: f.description!,
         description: f.description,
         lastSeen: f.lastCapturedAt,

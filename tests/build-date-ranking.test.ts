@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { suggestForLines, type SuggestionVehicle } from "@/services/quoteCapture/suggestions";
 import { normaliseDescription, parseSide } from "@/services/quoteCapture/normalise";
+import type { PartFitment, Vehicle } from "@/types/asacaps";
 import type { QuoteMapping } from "@/types/quoteMapping";
 
 const ym = (year: number, month: number) => year * 12 + month;
@@ -133,5 +134,60 @@ describe("build range in the evidence", () => {
   it("says nothing about builds when no record has a date", () => {
     const [s] = rank(TRITON, [mapping({})]);
     expect(s.evidence).toBe("used on 1 vehicle · Triton, last 2026-10-01");
+  });
+});
+
+describe("build-date ranking for ASA catalogue suggestions", () => {
+  const vehicle = (vin: string, productionFrom?: string): Vehicle => ({
+    id: vin,
+    vin,
+    model: "TRITON",
+    modelCode: "KK1T",
+    productionFrom,
+    rawText: "",
+    firstSeen: "2026-01-01T00:00:00.000Z",
+    lastSeen: "2026-01-01T00:00:00.000Z",
+  });
+  const fitment = (vin: string, partNumber: string): PartFitment => ({
+    id: `${vin}::${partNumber}`,
+    vin,
+    sessionId: "s",
+    partNumber,
+    description: "HOOD",
+    sources: ["asacaps"],
+    timesCopied: 1,
+    firstCapturedAt: "2026-10-12T00:00:00.000Z",
+    lastCapturedAt: "2026-10-12T00:00:00.000Z",
+  });
+  const query: SuggestionVehicle = { vin: "MMAJYKL10PH999999", model: "Triton", modelCode: "KK1T", buildMonth: ym(2022, 6) };
+  const catalogueRank = (vehicles: Vehicle[], fitments: PartFitment[]) =>
+    suggestForLines(query, [{ id: "1", description: "HOOD" }], [], { catalogue: { vehicles, fitments }, limit: 5 })[0]
+      .suggestions;
+
+  it("ranks by the ASA CAPS production date of each vehicle", () => {
+    const ranked = catalogueRank(
+      [vehicle("MMBA0000000000001", "2015.2.1"), vehicle("MMBA0000000000002", "2015.4.1"), vehicle("MMBA0000000000003", "2021.11.30")],
+      [fitment("MMBA0000000000001", "OLD"), fitment("MMBA0000000000002", "OLD"), fitment("MMBA0000000000003", "NEW")],
+    );
+    expect(ranked.map((s) => [s.partNumber, s.source, s.buildGap])).toEqual([
+      ["NEW", "catalogue", 7],
+      ["OLD", "catalogue", 86],
+    ]);
+    expect(ranked[0].evidence).toBe("seen in ASA CAPS on 1 vehicle · KK1T TRITON built 2021, last 2026-10-12");
+    expect(ranked[1].evidence).toBe(
+      "seen in ASA CAPS on 2 vehicles · KK1T TRITON built 2015 (older build), last 2026-10-12",
+    );
+  });
+
+  it("keeps the existing order for vehicles without a production date", () => {
+    const ranked = catalogueRank(
+      [vehicle("MMBA0000000000001"), vehicle("MMBA0000000000002"), vehicle("MMBA0000000000003")],
+      [fitment("MMBA0000000000001", "COMMON"), fitment("MMBA0000000000002", "COMMON"), fitment("MMBA0000000000003", "RARE")],
+    );
+    expect(ranked.map((s) => [s.partNumber, s.buildGap])).toEqual([
+      ["COMMON", undefined],
+      ["RARE", undefined],
+    ]);
+    expect(ranked[0].evidence).toBe("seen in ASA CAPS on 2 vehicles · KK1T TRITON, last 2026-10-12");
   });
 });
