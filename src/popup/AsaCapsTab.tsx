@@ -1,18 +1,39 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { ActiveVehicleSection } from './sections/ActiveVehicleSection';
+import { ManualControlsSection } from './sections/ManualControlsSection';
+import { RecentPartsSection } from './sections/RecentPartsSection';
 import { AsaCapsDatabase } from '@/storage/asacapsDb';
+import { requestActiveVehicleState, type ActiveVehicleState } from '@/services/messaging';
 import type { DebugInfo, Settings } from '@/types/asacaps';
 
+const EMPTY_STATE: ActiveVehicleState = { session: null, vehicle: null, recentFitments: [] };
+
 export function AsaCapsTab() {
+  const [vehicleState, setVehicleState] = useState<ActiveVehicleState>(EMPTY_STATE);
   const [settings, setSettings] = useState<Settings | undefined>(undefined);
   const [debugInfo, setDebugInfo] = useState<DebugInfo | null>(null);
   const [copied, setCopied] = useState(false);
 
+  const refreshVehicleState = useCallback(() => {
+    requestActiveVehicleState().then(setVehicleState);
+  }, []);
+
   useEffect(() => {
+    refreshVehicleState();
     AsaCapsDatabase.getSettings().then(setSettings);
     chrome.storage.local.get('lastDebugEvent').then((result) => {
       setDebugInfo((result.lastDebugEvent as DebugInfo | undefined) ?? null);
     });
-  }, []);
+
+    function onMessage(message: unknown) {
+      if (typeof message === 'object' && message !== null && (message as { type?: unknown }).type === 'STATE_UPDATED') {
+        refreshVehicleState();
+      }
+    }
+
+    chrome.runtime.onMessage.addListener(onMessage);
+    return () => chrome.runtime.onMessage.removeListener(onMessage);
+  }, [refreshVehicleState]);
 
   async function toggleDebugMode() {
     if (!settings) return;
@@ -40,7 +61,15 @@ export function AsaCapsTab() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex max-h-[520px] flex-col gap-4 overflow-y-auto">
+      <ActiveVehicleSection session={vehicleState.session} vehicle={vehicleState.vehicle} />
+      <RecentPartsSection fitments={vehicleState.recentFitments} />
+      <ManualControlsSection
+        captureEnabled={settings?.captureEnabled ?? true}
+        onCaptureEnabledChange={(enabled) => setSettings((prev) => (prev ? { ...prev, captureEnabled: enabled } : prev))}
+        onVehicleChanged={refreshVehicleState}
+      />
+
       <button
         type="button"
         onClick={openCatalogue}
@@ -48,10 +77,6 @@ export function AsaCapsTab() {
       >
         Open Catalogue
       </button>
-      <p className="text-xs text-neutral-500 dark:text-neutral-400">
-        Search, export, and auto-backup the VIN → part number catalogue built up while working in ASA CAPS. The
-        active vehicle, recent parts, and manual controls live in the sidebar on ASA CAPS pages.
-      </p>
 
       <div className="flex flex-col gap-2 border-t border-border pt-4 dark:border-border-dark">
         <label className="flex items-center justify-between gap-2 text-sm text-neutral-900 dark:text-neutral-100">

@@ -33,45 +33,11 @@
 // Every path logs to the console (prefixed "[Parts Interpreter Toolkit:ASA CAPS]")
 // so you can open DevTools on the ASA CAPS tab and see exactly what's happening.
 
-import { createRoot } from 'react-dom/client';
-import sidebarStyles from '@/styles/sidebar.css?inline';
 import { sendClipboardCapture } from '@/services/messaging';
-import { AsaCapsSidebar } from '@/sidebar/AsaCapsSidebar';
 
 const LOG_PREFIX = '[Parts Interpreter Toolkit:ASA CAPS]';
 
 console.log(LOG_PREFIX, 'content script loaded on', location.href, 'top frame:', window.top === window);
-
-const SIDEBAR_HOST_ID = 'parts-interpreter-toolkit-asacaps-host';
-
-/**
- * Same Shadow DOM pattern as the PartsCheck sidebar (src/content/index.tsx):
- * isolates our Tailwind styles from ASA CAPS's own CSS in both directions.
- * Only the top frame gets a sidebar — this content script also runs in
- * iframes (for the capture paths below), which shouldn't each mount a copy.
- */
-function injectSidebar(): void {
-  if (document.getElementById(SIDEBAR_HOST_ID)) return;
-
-  const host = document.createElement('div');
-  host.id = SIDEBAR_HOST_ID;
-  document.documentElement.appendChild(host);
-
-  const shadowRoot = host.attachShadow({ mode: 'open' });
-
-  const style = document.createElement('style');
-  style.textContent = sidebarStyles;
-  shadowRoot.appendChild(style);
-
-  const mountPoint = document.createElement('div');
-  shadowRoot.appendChild(mountPoint);
-
-  createRoot(mountPoint).render(<AsaCapsSidebar />);
-}
-
-if (window.top === window) {
-  injectSidebar();
-}
 
 function sendCapturedText(text: string, source: string): void {
   const trimmed = text.trim();

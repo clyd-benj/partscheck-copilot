@@ -48,7 +48,7 @@ export default defineManifest({
     },
     {
       matches: ASA_CAPS_MATCHES,
-      js: ['src/content/asacaps.tsx'],
+      js: ['src/content/asacaps.ts'],
       run_at: 'document_idle',
       all_frames: true,
     },

@@ -35,9 +35,9 @@ remember what's been looked up in ASA CAPS so it isn't re-looked-up.
 **Two independent capabilities, one extension:**
 - A **PartsCheck sidebar**: reads the RFQ page, shows Customer / Customer Match (fuzzy
   lookup against an imported spreadsheet) / Quote Details / Vehicle / Requested Parts.
-- An **ASA CAPS sidebar + catalogue**: passively watches clipboard copy events on ASA CAPS
-  pages, builds a local VIN → part-number catalogue, shows the active vehicle and recently
-  captured parts.
+- An **ASA CAPS popup + catalogue**: passively watches clipboard copy events on ASA CAPS
+  pages (no page-injected UI — see §5.7), builds a local VIN → part-number catalogue, shows
+  the active vehicle and recently captured parts in the toolbar popup.
 
 These two halves do **not** currently talk to each other (e.g. there is no "parts seen for
 this VIN in ASA CAPS" shown inside the PartsCheck sidebar). That cross-reference was
@@ -426,29 +426,34 @@ there in the first place.
 
 ### 5.4 Message protocol (`src/services/messaging.ts`)
 
-All content-script ↔ background communication goes through one typed `RuntimeMessage`
+All content-script/popup ↔ background communication goes through one typed `RuntimeMessage`
 union, each variant with an `is*Message()` type guard and a paired `request*()` /
-`send*()` helper for the content-script side. Current message types:
-- `GET_CUSTOMERS`, `ADD_CUSTOMER` — customer database (PartsCheck sidebar).
+`send*()` helper for the calling side. Current message types:
+- `GET_CUSTOMERS`, `ADD_CUSTOMER` — customer database (PartsCheck sidebar, content-script
+  origin, genuinely needs the relay).
 - `CLIPBOARD_CAPTURE` — fire-and-forget, ASA CAPS content script → background, triggers
   `processClipboardText()`.
-- `GET_ACTIVE_VEHICLE_STATE` — returns `{ session, vehicle, recentFitments }` for the
-  ASA CAPS sidebar.
-- `SET_VEHICLE_MANUALLY`, `CLOSE_ACTIVE_SESSION` — ASA CAPS sidebar manual controls.
-- `GET_SETTINGS`, `SET_CAPTURE_ENABLED` — ASA CAPS sidebar's pause-capture toggle.
+- `GET_ACTIVE_VEHICLE_STATE` — returns `{ session, vehicle, recentFitments }`, called from
+  the **popup's** `AsaCapsTab.tsx` (see §5.7 — there's no ASA CAPS content-script UI, so
+  this is popup-origin, not content-script-origin like the customer ones above; kept as a
+  message purely for reuse/consistency, not because the popup has an origin problem).
+- `SET_VEHICLE_MANUALLY`, `CLOSE_ACTIVE_SESSION` — same, popup's manual controls section.
+- `GET_SETTINGS`, `SET_CAPTURE_ENABLED` — same, popup's pause-capture toggle (though
+  `AsaCapsTab.tsx` also reads/writes `debugMode`/`logUnknownEvents` via direct
+  `AsaCapsDatabase` calls — see §5.7 for why that inconsistency exists and was kept).
 - `RUN_BACKUP_NOW` — catalogue page's manual backup trigger (relayed to the offscreen
   document; see 5.6).
 
 Background also **broadcasts** a bare `{ type: 'STATE_UPDATED' }` message (not part of the
 typed union, matches the original project's pattern) after any clipboard capture or manual
-session change — the ASA CAPS sidebar listens for this via a raw
-`chrome.runtime.onMessage` listener to refresh reactively instead of polling.
+session change — the popup's `AsaCapsTab.tsx` listens for this via a raw
+`chrome.runtime.onMessage` listener (while open) to refresh reactively instead of polling.
 
-### 5.5 ASA CAPS content script (`src/content/asacaps.tsx`)
+### 5.5 ASA CAPS content script (`src/content/asacaps.ts`)
 
-Renamed from `.ts` to `.tsx` during the sidebar build since it now renders React. Five
-independent capture paths, all feeding the same `sendClipboardCapture()` → background
-pipeline, because ASA CAPS's exact UI behavior can't be assumed across dealer instances:
+Five independent capture paths, all feeding the same `sendClipboardCapture()` → background
+pipeline, because ASA CAPS's exact UI behavior can't be assumed across dealer instances.
+**This file has no UI of any kind** — see §5.7 for why, and don't reintroduce any:
 1. **Copy/cut DOM events** — reads `window.getSelection()`, enriched with the row's
    description/PNC if the selection sits inside a recognizable row. Never blocks/alters the
    native copy.
@@ -472,9 +477,10 @@ pipeline, because ASA CAPS's exact UI behavior can't be assumed across dealer in
    (reconstructing the destination URL by hand didn't work because this app's hash-routing
    shapes are inconsistent across views).
 
-Only the **top frame** mounts the sidebar (`if (window.top === window) injectSidebar()`);
-the script also runs in iframes (`all_frames: true` in the manifest, needed for capture
-paths 2 and 4 potentially being framed), which must not each mount their own copy.
+This script also runs in iframes (`all_frames: true` in the manifest, needed for capture
+paths 2 and 4 potentially being framed) — since there's no UI to worry about mounting twice,
+`all_frames: true` is just there so the capture paths work regardless of which frame the
+action happens in.
 
 **Lint issues found porting this file** (the original project had no ESLint configured at
 all, so these never surfaced there): three inner `function` declarations inside block
@@ -504,18 +510,61 @@ records a `lastError` for the catalogue page to surface instead of failing silen
 `src/types/file-system-access.d.ts` — hand-written ambient types for this API, since it's
 not yet in TypeScript's bundled `lib.dom.d.ts`. Ported unchanged.
 
-### 5.7 ASA CAPS sidebar and popup (new work, not ported)
+### 5.7 ASA CAPS UI lives in the popup only — no page-injected sidebar
 
-Unlike §5.2–5.6, these are **new builds**, not ports — the original project's popup/
-catalogue/inspector pages were vanilla HTML/CSS/DOM manipulation (esbuild, no framework),
-and per the user's explicit request to integrate "keeping the interface of our toolkit,"
-these were rebuilt from scratch in the toolkit's Tailwind/React/SectionCard/FieldRow
-component style, not ported markup.
+**Correction made after initial integration, worth reading carefully if you're about to
+"improve" this again.** The first pass at this integration mounted a full page-injected
+sidebar on ASA CAPS pages (Shadow DOM, same visual pattern as the PartsCheck sidebar),
+reasoning "same design language, same mechanism." **This was wrong and was reverted** —
+the user caught it immediately (a screenshot showing the ASA CAPS sidebar covering an
+unrelated page/tab) and said the sidebar must only appear on the PartsCheck side, "put
+this similar to where it was when they were separate." The original standalone
+`asacapscatalogue` project's content script had **zero UI** — no DOM injection at all; its
+entire "Active Vehicle / Recent Parts / Controls" interface lived in the **toolbar popup**,
+opened on click, not an always-present page overlay. Re-adding a page sidebar for it was an
+unrequested product decision that didn't match either the original project's actual
+behavior or what the user wanted post-merge.
 
-- `src/sidebar/AsaCapsSidebar.tsx` + `sections/ActiveVehicleSection.tsx` /
-  `RecentPartsSection.tsx` / `ManualControlsSection.tsx` — vehicle title/VIN(copyable)/
-  session-start/part-count, recent parts list (part number copyable, description, ×N for
-  repeat copies), pause-capture toggle + set-vehicle-manually form + close-session button.
+**Current (correct) state:**
+- `src/content/asacaps.ts` (note: **plain `.ts`, not `.tsx`** — it has zero React/JSX
+  again; it was briefly `.tsx` during the reverted sidebar experiment) contains **only**
+  the five capture paths from §5.5. No DOM injection, no Shadow DOM, no `createRoot()`
+  call anywhere in it.
+- `src/popup/sections/ActiveVehicleSection.tsx`, `RecentPartsSection.tsx`,
+  `ManualControlsSection.tsx` (moved here from `src/sidebar/sections/` — they were
+  originally written for the reverted sidebar; the components themselves needed no change,
+  since they were always just `SectionCard`-wrapped content blocks with no
+  fixed/absolute positioning of their own, only the deleted outer `AsaCapsSidebar.tsx`
+  shell had that) are composed directly inside **`src/popup/AsaCapsTab.tsx`**, in the same
+  order the original project's `popup.html` used: Active Vehicle, Recent Parts, Controls
+  (pause/set-vehicle/close-session), then the "Open Catalogue" button, then
+  debug-mode/log-unknown-events settings and the debug panel at the bottom.
+- `AsaCapsTab.tsx` fetches active-vehicle state via the same `requestActiveVehicleState()`
+  message used before (still correct and necessary — the popup is extension-origin, but
+  reusing the existing message-based helper was simpler and lower-risk than also adding a
+  direct-`AsaCapsDatabase`-call code path for just this one case), and listens for the
+  background's `STATE_UPDATED` broadcast while the popup is open, exactly like the original
+  project's `popup.ts` did. `settings` (debugMode/logUnknownEvents/captureEnabled) are read
+  via direct `AsaCapsDatabase.getSettings()`/`putSettings()` calls (fine from the popup —
+  no origin problem there), and `captureEnabled` is handed down as a prop to
+  `ManualControlsSection`, which still persists toggles via `requestSetCaptureEnabled()` —
+  two different access paths for the same `Settings` object (one direct, one message-based)
+  that both work correctly; this inconsistency was judged not worth unifying for the risk
+  of touching working code.
+- The popup content for this tab is wrapped in `max-h-[520px] overflow-y-auto` since it's
+  now considerably taller than the Customer Database tab (active vehicle + recent parts +
+  controls + catalogue button + debug section, all in one scrollable tab) — Chrome popups
+  don't handle arbitrarily tall content gracefully otherwise.
+- `src/sidebar/AsaCapsSidebar.tsx` **no longer exists** — it was deleted, not kept around
+  disabled/unused. If you see any reference to it anywhere, that reference is stale.
+
+**If someone asks for "a sidebar on ASA CAPS pages too" in the future:** that may be a
+legitimate ask, but confirm it explicitly first — it directly contradicts a correction the
+user already made once. Don't silently reintroduce it by analogy with the PartsCheck side.
+
+What follows below (catalogue page, popup tab switcher) is still accurate and wasn't
+touched by this correction — only the "always-on sidebar" piece was wrong.
+
 - `src/popup/AsaCapsTab.tsx` — debug mode toggle, "log unknown clipboard events" privacy
   toggle (off by default — the original project's own privacy rationale, preserved
   verbatim: unknown clipboard content may contain customer names/addresses/phone numbers;
@@ -573,7 +622,7 @@ different environment; don't assume it will.
 
 **Manifest merge summary** (`manifest.config.ts`): two `content_scripts` entries — one for
 `https://*.partscheck.com.au/*` (`src/content/index.tsx`), one for
-`*://*.myasaweb.com/*` + `*://*.asacaps.com/*` (`src/content/asacaps.tsx`,
+`*://*.myasaweb.com/*` + `*://*.asacaps.com/*` (`src/content/asacaps.ts`,
 `all_frames: true`). Permissions: `storage` (original toolkit) + `notifications`,
 `clipboardRead`, `alarms`, `offscreen` (ASA CAPS). `action.default_popup` →
 `src/popup/index.html`. Background: `src/background/index.ts`, `type: "module"`.
