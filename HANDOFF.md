@@ -651,12 +651,18 @@ different environment; don't assume it will.
 
 - The user tests by loading `dist/` as an unpacked extension in their own Chrome, on real
   PartsCheck/ASA CAPS pages — not something achievable from inside a sandboxed agent
-  session. When a change is ready, build it, zip `dist/` (excluding `.map` files), send it
+  session. **The user does not have admin rights on their Windows machine and cannot
+  install Node.js/npm** (the standard Node installer requires admin; they tried and
+  confirmed it fails). This means `git pull && npm install && npm run build` on their end
+  is **not** a usable workflow for them — don't default to suggesting it. Git itself *is*
+  installed and working for them (they have a working clone and can `git pull`), so for
+  reading/reference that's fine, but **the actual build must happen in the agent's own
+  sandboxed session, every time**: build it, zip `dist/` (excluding `.map` files), send it
   as a file, and give the exact reload steps (unzip over the old `dist/`, refresh the
-  extension card on `chrome://extensions`) — **unless** git push/pull is working, in which
-  case the user can `git pull && npm install && npm run build` themselves instead. Prefer
-  telling them about the git path now that push works, but sending a zip is still a fine
-  fallback if they ask for one directly.
+  extension card on `chrome://extensions`). If they ever mention getting Node working
+  (e.g. a portable no-install zip distribution added to their *user* PATH, which doesn't
+  need admin rights — this was offered once, unconfirmed whether they did it), re-check
+  before assuming the zip workflow is still required.
 - The user reports real bugs with real evidence (screenshots, actual exported/source
   spreadsheet files, specific customer names/numbers that proved a row was dropped). **Take
   every such report at face value and reproduce it with the actual provided file/data
