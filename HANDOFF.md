@@ -601,7 +601,7 @@ npm run build      # tsc -b && vite build -> dist/
 npm run dev        # Vite watch mode with HMR; load dist/ as unpacked, refresh on changes
 npm run lint       # eslint . --max-warnings 0
 npm run typecheck  # tsc -b only
-npm test           # vitest run — 12 files, 103 tests, all currently passing
+npm test           # vitest run — 14 files, 123 tests, all currently passing
 npm run test:watch
 npm run format     # prettier --write .
 ```
@@ -683,15 +683,15 @@ different environment; don't assume it will.
 
 ---
 
-## 9. Quote mappings — learning part numbers from PartsCheck quotes (phase 1 done)
+## 9. Quote mappings — learning part numbers from PartsCheck quotes and suggesting them
 
 The "cross-reference" gap from §7 is being built as **learning from DMS Upload**: the user
 enters ASA CAPS part numbers into Pentana ERA *in the same order as the PartsCheck lines*,
 exports ERA's CSV (`12A-PARTS-QUOTE-RPT_Data.csv`, no header: quote no, initials, `MI`-prefixed
 part no, description, qty, list, buy, notes) and uploads it with PartsCheck's "DMS Upload".
 PartsCheck fills rows **by position**. The extension reads the filled rows and stores each
-(repairer description → part number) pair. Phase 2 (not built yet) uses them to suggest part
-numbers on new quotes.
+(repairer description → part number) pair. Phase 2 uses them to suggest part
+numbers on new quotes (§9.3).
 
 ### 9.1 What a filled PartsCheck row looks like (confirmed from a real save)
 
@@ -745,11 +745,33 @@ anonymised the same way.
   `quote-capture-watcher`. They use `// @vitest-environment jsdom` (jsdom is a devDependency
   for this).
 
-### 9.3 Phase 2 notes (suggestions, not built yet)
+### 9.3 Suggestions on new quotes (phase 2)
 
-- Repairers write a side on parts that aren't sided (e.g. "L/H/F HUB BEARING" → ERA
-  "BEARINGFR WHEEL HUB", no side). Hard side matching should apply only when the stored
-  mapping's part is sided (ERA side or repairer side on a sided part); unsided parts can match
-  either side.
-- Rank exact VIN > same model code > same model; show evidence; copy buttons only — never
-  write into PartsCheck inputs.
+- `src/services/quoteCapture/suggestions.ts` — pure `suggestForLines(vehicle, lines, mappings)`.
+  A stored mapping is a candidate when:
+  - **wording**: identical normalised word set, or Jaccard ≥ 0.75 with **identical position
+    words** (FRONT/REAR/UPPER/LOWER/INNER/OUTER/CENTRE, `POSITION_TOKENS` in synonyms.ts).
+    The position rule was added after an end-to-end check showed "GUARD LINER FRONT" being
+    offered the rear liner at 0.75.
+  - **side**: the part's hand comes from its **ERA description** (falls back to the repairer's
+    side only when there's no ERA text). Handed parts must match the line's side (a line
+    naming both sides accepts either); a handed part is never offered for a line with no side.
+    Unhanded parts (e.g. "L/H/F HUB BEARING" → ERA "BEARINGFR WHEEL HUB") fit any side.
+  - **vehicle tier**, best first: same VIN > same model code (ASA CAPS catalogue, by VIN) >
+    same VIN pattern (first 8 chars = WMI + descriptor section; used because the model code
+    is usually unknown for a new quote's VIN) > same PartsCheck model. Other models are never
+    suggested.
+  - NA rows, `sideConflict` rows and the open quote's own rows are excluded.
+  Candidates are grouped by part number; sorted by tier, wording score, distinct vehicles,
+  times used, recency; top 3 per line. Evidence strings like "used on 4 vehicles · KK1T
+  Triton, last 2026-10-20".
+- `suggestForQuote()` (captureQuote.ts) runs it in the background over all stored mappings
+  (`GET_QUOTE_SUGGESTIONS` message). `src/content/quoteSuggestions.ts` asks once on page load
+  for lines with no part number yet; `PartsChecklist.tsx` shows up to 3 suggestions under each
+  requested line with a copy button, plus **"Copy all in order"** = top suggestion per line,
+  newline-separated, blank line where none (keeps positions aligned with PartsCheck/ERA order).
+  Nothing is ever written into PartsCheck inputs.
+- Verified end to end by loading the built `dist/` into Playwright's Chromium with the fixture
+  pages served at a `partscheck.com.au` URL (capture of the filled quote, then suggestions on a
+  new quote). That harness lives outside the repo; it's ~40 lines of `launchPersistentContext`
+  with `--load-extension` + `context.route()`.

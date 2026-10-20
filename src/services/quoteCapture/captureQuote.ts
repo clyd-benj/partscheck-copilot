@@ -1,4 +1,10 @@
 import { buildQuoteMappings, summariseCapture } from './buildMappings';
+import {
+  suggestForLines,
+  type LineSuggestions,
+  type SuggestionLine,
+  type SuggestionVehicle,
+} from './suggestions';
 import { AsaCapsDatabase } from '@/storage/asacapsDb';
 import type { QuoteCaptureResult, QuoteContext, QuoteRow } from '@/types/quoteMapping';
 
@@ -24,4 +30,21 @@ export async function captureQuote(
   await AsaCapsDatabase.putQuoteMappings(mappings);
 
   return summariseCapture(context, rows, mappings);
+}
+
+/**
+ * Background-side suggestions for a quote's unfilled lines, ranked against
+ * every stored mapping. The vehicle's model code comes from the ASA CAPS
+ * catalogue when the VIN has been seen there.
+ */
+export async function suggestForQuote(
+  vehicle: Omit<SuggestionVehicle, 'modelCode'>,
+  lines: SuggestionLine[],
+  excludeQuoteKey?: string,
+): Promise<LineSuggestions[]> {
+  const known = vehicle.vin ? await AsaCapsDatabase.getVehicle(vehicle.vin) : undefined;
+  const mappings = await AsaCapsDatabase.listQuoteMappings();
+  return suggestForLines({ ...vehicle, modelCode: known?.modelCode }, lines, mappings, {
+    excludeQuoteKey,
+  });
 }

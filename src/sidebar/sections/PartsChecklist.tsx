@@ -1,13 +1,88 @@
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { SectionCard } from '@/components/SectionCard';
+import type { QuoteSuggestionsStore } from '@/content/quoteSuggestions';
+import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
+import {
+  copyAllText,
+  type LineSuggestions,
+  type PartSuggestion,
+} from '@/services/quoteCapture/suggestions';
 import type { RequestedPart } from '@/types/rfq';
 
 interface PartsChecklistProps {
   parts: RequestedPart[];
+  suggestionsStore: QuoteSuggestionsStore;
 }
 
-export function PartsChecklist({ parts }: PartsChecklistProps) {
+const NO_SUGGESTIONS: LineSuggestions['suggestions'] = [];
+
+function SuggestionRow({ suggestion }: { suggestion: PartSuggestion }) {
+  const { copied, copy } = useCopyToClipboard();
+
+  return (
+    <div className="flex items-start gap-2 py-0.5 pl-10 pr-4 text-xs">
+      <button
+        type="button"
+        onClick={() => copy(suggestion.partNumber)}
+        title="Copy part number"
+        className="shrink-0 rounded border border-border px-1.5 py-0.5 font-mono text-neutral-900 transition hover:border-accent hover:text-accent dark:border-border-dark dark:text-neutral-100"
+      >
+        {copied ? 'Copied' : suggestion.partNumber}
+      </button>
+      <div className="min-w-0">
+        {suggestion.eraDescription && (
+          <div className="truncate text-neutral-700 dark:text-neutral-300">
+            {suggestion.eraDescription}
+            {suggestion.isAccessory && <span className="text-neutral-500"> · accessory</span>}
+          </div>
+        )}
+        <div className="text-neutral-500 dark:text-neutral-400">
+          {/* Non-breaking hyphens so dates don't wrap mid-way. */}
+          {suggestion.evidence.replace(/-/g, '\u2011')}
+        </div>
+        {suggestion.similarWording && (
+          <div className="italic text-neutral-400 dark:text-neutral-500">
+            similar to “{suggestion.similarWording}”
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CopyAllButton({ text, count, total }: { text: string; count: number; total: number }) {
+  const { copied, copy } = useCopyToClipboard();
+
+  return (
+    <div className="flex items-center justify-between gap-2 px-4 py-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+      <span>
+        Suggestions for {count} of {total} lines
+      </span>
+      <button
+        type="button"
+        onClick={() => copy(text)}
+        title="Top suggestion per line, one per line (blank where none), in PartsCheck order"
+        className="rounded border border-border px-2 py-0.5 text-neutral-900 transition hover:border-accent hover:text-accent dark:border-border-dark dark:text-neutral-100"
+      >
+        {copied ? 'Copied' : 'Copy all in order'}
+      </button>
+    </div>
+  );
+}
+
+export function PartsChecklist({ parts, suggestionsStore }: PartsChecklistProps) {
   const [checkedIds, setCheckedIds] = useState<ReadonlySet<string>>(new Set());
+  const suggestionsStatus = useSyncExternalStore(suggestionsStore.subscribe, suggestionsStore.get);
+
+  const suggestionsById = new Map(
+    suggestionsStatus.state === 'ready'
+      ? suggestionsStatus.lines.map((line) => [line.id, line.suggestions])
+      : [],
+  );
+  const perPart = parts.map((part) => ({
+    suggestions: suggestionsById.get(part.id) ?? NO_SUGGESTIONS,
+  }));
+  const linesWithSuggestions = perPart.filter((line) => line.suggestions.length > 0).length;
 
   function toggle(id: string) {
     setCheckedIds((prev) => {
@@ -28,22 +103,39 @@ export function PartsChecklist({ parts }: PartsChecklistProps) {
           No requested parts found on this RFQ.
         </p>
       ) : (
-        parts.map((part) => (
-          <label
-            key={part.id}
-            className="flex cursor-pointer items-start gap-2 px-4 py-1.5 text-sm text-neutral-900 hover:bg-surface-subtle dark:text-neutral-100 dark:hover:bg-surface-dark-subtle"
-          >
-            <input
-              type="checkbox"
-              checked={checkedIds.has(part.id)}
-              onChange={() => toggle(part.id)}
-              className="mt-0.5 h-4 w-4 shrink-0 rounded border-neutral-400 accent-accent"
+        <>
+          {linesWithSuggestions > 0 && (
+            <CopyAllButton
+              text={copyAllText(perPart)}
+              count={linesWithSuggestions}
+              total={parts.length}
             />
-            <span className={checkedIds.has(part.id) ? 'text-neutral-400 line-through dark:text-neutral-600' : ''}>
-              {part.description}
-            </span>
-          </label>
-        ))
+          )}
+          {parts.map((part, i) => (
+            <div key={part.id} className="py-0.5">
+              <label className="flex cursor-pointer items-start gap-2 px-4 py-1.5 text-sm text-neutral-900 hover:bg-surface-subtle dark:text-neutral-100 dark:hover:bg-surface-dark-subtle">
+                <input
+                  type="checkbox"
+                  checked={checkedIds.has(part.id)}
+                  onChange={() => toggle(part.id)}
+                  className="mt-0.5 h-4 w-4 shrink-0 rounded border-neutral-400 accent-accent"
+                />
+                <span
+                  className={
+                    checkedIds.has(part.id)
+                      ? 'text-neutral-400 line-through dark:text-neutral-600'
+                      : ''
+                  }
+                >
+                  {part.description}
+                </span>
+              </label>
+              {perPart[i].suggestions.map((suggestion) => (
+                <SuggestionRow key={suggestion.partNumber} suggestion={suggestion} />
+              ))}
+            </div>
+          ))}
+        </>
       )}
     </SectionCard>
   );

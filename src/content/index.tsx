@@ -1,10 +1,19 @@
 import { createRoot } from 'react-dom/client';
 import sidebarStyles from '@/styles/sidebar.css?inline';
 import { extractRfqData } from '@/services/extractors';
-import { requestSaveQuoteCapture } from '@/services/messaging';
+import { requestQuoteSuggestions, requestSaveQuoteCapture } from '@/services/messaging';
 import { isRfqPage } from '@/services/rfqDetection';
 import { Sidebar } from '@/sidebar/Sidebar';
-import { createQuoteCaptureStore, startQuoteCaptureWatcher, type QuoteCaptureStore } from './quoteCaptureWatcher';
+import {
+  createQuoteCaptureStore,
+  startQuoteCaptureWatcher,
+  type QuoteCaptureStore,
+} from './quoteCaptureWatcher';
+import {
+  createQuoteSuggestionsStore,
+  loadQuoteSuggestions,
+  type QuoteSuggestionsStore,
+} from './quoteSuggestions';
 
 const HOST_ID = 'parts-interpreter-toolkit-host';
 
@@ -14,7 +23,10 @@ const HOST_ID = 'parts-interpreter-toolkit-host';
  * Tailwind base reset can never bleed out and alter PartsCheck's own
  * styling. This is what makes the extension truly read-only/non-intrusive.
  */
-function injectSidebar(captureStore: QuoteCaptureStore): void {
+function injectSidebar(
+  captureStore: QuoteCaptureStore,
+  suggestionsStore: QuoteSuggestionsStore,
+): void {
   if (document.getElementById(HOST_ID)) return;
 
   const host = document.createElement('div');
@@ -30,11 +42,19 @@ function injectSidebar(captureStore: QuoteCaptureStore): void {
   const mountPoint = document.createElement('div');
   shadowRoot.appendChild(mountPoint);
 
-  createRoot(mountPoint).render(<Sidebar data={extractRfqData()} captureStore={captureStore} />);
+  createRoot(mountPoint).render(
+    <Sidebar
+      data={extractRfqData()}
+      captureStore={captureStore}
+      suggestionsStore={suggestionsStore}
+    />,
+  );
 }
 
 if (isRfqPage()) {
   const captureStore = createQuoteCaptureStore();
-  injectSidebar(captureStore);
+  const suggestionsStore = createQuoteSuggestionsStore();
+  injectSidebar(captureStore, suggestionsStore);
+  void loadQuoteSuggestions(suggestionsStore, requestQuoteSuggestions);
   startQuoteCaptureWatcher(captureStore, requestSaveQuoteCapture);
 }

@@ -2,6 +2,7 @@ import type { AddCustomerResult } from '@/storage/customerDb';
 import type { CustomerRecord } from '@/types/customer';
 import type { PartFitment, Settings, Vehicle, VehicleSession } from '@/types/asacaps';
 import type { QuoteCaptureResult, QuoteContext, QuoteRow } from '@/types/quoteMapping';
+import type { LineSuggestions, SuggestionLine } from '@/services/quoteCapture/suggestions';
 
 /**
  * Content scripts run in the host page's origin (PartsCheck or ASA CAPS),
@@ -21,6 +22,7 @@ const CLOSE_ACTIVE_SESSION_MESSAGE_TYPE = 'CLOSE_ACTIVE_SESSION';
 const GET_SETTINGS_MESSAGE_TYPE = 'GET_SETTINGS';
 const SET_CAPTURE_ENABLED_MESSAGE_TYPE = 'SET_CAPTURE_ENABLED';
 const SAVE_QUOTE_CAPTURE_MESSAGE_TYPE = 'SAVE_QUOTE_CAPTURE';
+const GET_QUOTE_SUGGESTIONS_MESSAGE_TYPE = 'GET_QUOTE_SUGGESTIONS';
 
 interface GetCustomersMessage {
   type: typeof GET_CUSTOMERS_MESSAGE_TYPE;
@@ -68,6 +70,13 @@ interface SaveQuoteCaptureMessage {
   rows: QuoteRow[];
 }
 
+interface GetQuoteSuggestionsMessage {
+  type: typeof GET_QUOTE_SUGGESTIONS_MESSAGE_TYPE;
+  vehicle: { vin?: string; model?: string };
+  lines: SuggestionLine[];
+  excludeQuoteKey?: string;
+}
+
 export type RuntimeMessage =
   | GetCustomersMessage
   | AddCustomerMessage
@@ -78,7 +87,8 @@ export type RuntimeMessage =
   | CloseActiveSessionMessage
   | GetSettingsMessage
   | SetCaptureEnabledMessage
-  | SaveQuoteCaptureMessage;
+  | SaveQuoteCaptureMessage
+  | GetQuoteSuggestionsMessage;
 
 function hasType(message: unknown, type: string): boolean {
   return typeof message === 'object' && message !== null && (message as { type?: unknown }).type === type;
@@ -122,6 +132,12 @@ export function isSetCaptureEnabledMessage(message: unknown): message is SetCapt
 
 export function isSaveQuoteCaptureMessage(message: unknown): message is SaveQuoteCaptureMessage {
   return hasType(message, SAVE_QUOTE_CAPTURE_MESSAGE_TYPE);
+}
+
+export function isGetQuoteSuggestionsMessage(
+  message: unknown,
+): message is GetQuoteSuggestionsMessage {
+  return hasType(message, GET_QUOTE_SUGGESTIONS_MESSAGE_TYPE);
 }
 
 // --- Customer database (content script ↔ background) ---
@@ -197,4 +213,20 @@ export async function requestSaveQuoteCapture(
   const message: SaveQuoteCaptureMessage = { type: SAVE_QUOTE_CAPTURE_MESSAGE_TYPE, context, rows };
   const response = (await chrome.runtime.sendMessage(message)) as QuoteCaptureResult | undefined;
   return response ?? null;
+}
+
+/** Ranked part-number suggestions for the given lines; [] if the background couldn't be reached. */
+export async function requestQuoteSuggestions(
+  vehicle: { vin?: string; model?: string },
+  lines: SuggestionLine[],
+  excludeQuoteKey?: string,
+): Promise<LineSuggestions[]> {
+  const message: GetQuoteSuggestionsMessage = {
+    type: GET_QUOTE_SUGGESTIONS_MESSAGE_TYPE,
+    vehicle,
+    lines,
+    excludeQuoteKey,
+  };
+  const response = (await chrome.runtime.sendMessage(message)) as LineSuggestions[] | undefined;
+  return response ?? [];
 }

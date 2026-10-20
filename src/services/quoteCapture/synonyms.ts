@@ -28,6 +28,20 @@ export const SIDE_COMPOUNDS: ReadonlyArray<readonly [RegExp, string]> = [
 export const LEFT_TOKENS: ReadonlySet<string> = new Set(['LH', 'LEFT']);
 export const RIGHT_TOKENS: ReadonlySet<string> = new Set(['RH', 'RIGHT']);
 
+/**
+ * Position words (after synonym mapping). A "similar wording" match must have
+ * exactly the same ones: a FRONT liner is never a REAR liner.
+ */
+export const POSITION_TOKENS: ReadonlySet<string> = new Set([
+  'FRONT',
+  'REAR',
+  'UPPER',
+  'LOWER',
+  'INNER',
+  'OUTER',
+  'CENTRE',
+]);
+
 /** Multi-word or slashed shorthand, rewritten before punctuation is stripped. */
 export const PHRASE_SYNONYMS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bB\/BAR\b/g, ' BUMPER '],
@@ -102,4 +116,6 @@ export const TOKEN_SYNONYMS: Readonly<Record<string, string>> = {
   SENSR: 'SENSOR',
   CAM: 'CAMERA',
   HSG: 'HOUSING',
+  CTR: 'CENTRE',
+  CENTER: 'CENTRE',
 };

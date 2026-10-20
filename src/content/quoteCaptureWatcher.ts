@@ -1,4 +1,5 @@
 import { extractQuoteContext, extractQuoteRows } from '@/services/extractors/quoteRows';
+import { createValueStore, type ValueStore } from './valueStore';
 import type { QuoteCaptureResult, QuoteContext, QuoteRow } from '@/types/quoteMapping';
 
 /**
@@ -18,26 +19,10 @@ export type QuoteCaptureStatus =
   | { state: 'saved'; result: QuoteCaptureResult }
   | { state: 'error'; message: string };
 
-export interface QuoteCaptureStore {
-  get(): QuoteCaptureStatus;
-  subscribe(listener: () => void): () => void;
-  set(status: QuoteCaptureStatus): void;
-}
+export type QuoteCaptureStore = ValueStore<QuoteCaptureStatus>;
 
 export function createQuoteCaptureStore(): QuoteCaptureStore {
-  let status: QuoteCaptureStatus = { state: 'no-quote' };
-  const listeners = new Set<() => void>();
-  return {
-    get: () => status,
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    set(next) {
-      status = next;
-      for (const listener of listeners) listener();
-    },
-  };
+  return createValueStore<QuoteCaptureStatus>({ state: 'no-quote' });
 }
 
 export type SaveQuoteCapture = (

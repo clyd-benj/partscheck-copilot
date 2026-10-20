@@ -2,13 +2,14 @@ import { addCustomer, getAllCustomers } from '@/storage/customerDb';
 import { AsaCapsDatabase } from '@/storage/asacapsDb';
 import { processClipboardText, setActiveVehicleManually, closeActiveSession } from '@/services/asacaps/vehicle-session';
 import { isValidVin } from '@/services/asacaps/vin';
-import { captureQuote } from '@/services/quoteCapture/captureQuote';
+import { captureQuote, suggestForQuote } from '@/services/quoteCapture/captureQuote';
 import {
   isAddCustomerMessage,
   isClipboardCaptureMessage,
   isCloseActiveSessionMessage,
   isGetActiveVehicleStateMessage,
   isGetCustomersMessage,
+  isGetQuoteSuggestionsMessage,
   isGetSettingsMessage,
   isRunBackupNowMessage,
   isSaveQuoteCaptureMessage,
@@ -223,6 +224,16 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
       .catch((error: unknown) => {
         console.error(LOG_PREFIX, 'quote capture failed', error);
         sendResponse(undefined);
+      });
+    return true;
+  }
+
+  if (isGetQuoteSuggestionsMessage(message)) {
+    suggestForQuote(message.vehicle, message.lines, message.excludeQuoteKey)
+      .then(sendResponse)
+      .catch((error: unknown) => {
+        console.error(LOG_PREFIX, 'quote suggestions failed', error);
+        sendResponse([]);
       });
     return true;
   }

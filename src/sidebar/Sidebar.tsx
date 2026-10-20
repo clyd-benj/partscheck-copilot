@@ -5,14 +5,16 @@ import { QuoteCaptureSection } from './sections/QuoteCaptureSection';
 import { QuoteDetailsSection } from './sections/QuoteDetailsSection';
 import { VehicleSection } from './sections/VehicleSection';
 import type { QuoteCaptureStore } from '@/content/quoteCaptureWatcher';
+import type { QuoteSuggestionsStore } from '@/content/quoteSuggestions';
 import type { RfqData } from '@/types/rfq';
 
 interface SidebarProps {
   data: RfqData;
   captureStore: QuoteCaptureStore;
+  suggestionsStore: QuoteSuggestionsStore;
 }
 
-export function Sidebar({ data, captureStore }: SidebarProps) {
+export function Sidebar({ data, captureStore, suggestionsStore }: SidebarProps) {
   return (
     <div className="pit-root fixed inset-y-0 right-0 z-[2147483647] flex h-screen w-[360px] flex-col overflow-y-auto border-l border-border bg-surface text-sm text-neutral-900 shadow-panel dark:border-border-dark dark:bg-surface-dark dark:text-neutral-100">
       <header className="sticky top-0 flex items-center gap-2 border-b border-border bg-surface px-4 py-3 dark:border-border-dark dark:bg-surface-dark">
@@ -22,7 +24,7 @@ export function Sidebar({ data, captureStore }: SidebarProps) {
       <CustomerMatchSection company={data.customer.company} address={data.customer.address} />
       <QuoteDetailsSection reference={data.reference} requiredBy={data.requiredBy} />
       <VehicleSection vehicle={data.vehicle} />
-      <PartsChecklist parts={data.requestedParts} />
+      <PartsChecklist parts={data.requestedParts} suggestionsStore={suggestionsStore} />
       <QuoteCaptureSection store={captureStore} />
     </div>
   );
