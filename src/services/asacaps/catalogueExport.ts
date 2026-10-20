@@ -16,6 +16,9 @@ export interface CatalogueRow {
   option?: string;
   exteriorColor?: string;
   interiorColor?: string;
+  /** ASA CAPS production dates, "year.month.day" (e.g. "2010.12.3"). */
+  productionFrom?: string;
+  productionTo?: string;
   partNumber: string;
   description?: string;
   /** ERA description, for parts captured from PartsCheck quotes. */
@@ -49,6 +52,8 @@ export async function buildCatalogueRows(): Promise<CatalogueRow[]> {
         option: vehicle?.option,
         exteriorColor: vehicle?.exteriorColor,
         interiorColor: vehicle?.interiorColor,
+        productionFrom: vehicle?.productionFrom,
+        productionTo: vehicle?.productionTo,
         partNumber: f.partNumber,
         description: f.description,
         eraDescription: f.eraDescription,
@@ -92,6 +97,8 @@ const FITMENT_HEADERS = [
   'Times Copied',
   'First Captured',
   'Last Captured',
+  'Production From',
+  'Production To',
   'ERA Description',
   'Sources',
   'Record Type',
@@ -145,6 +152,8 @@ function fitmentCells(row: CatalogueRow): unknown[] {
     row.timesCopied,
     row.firstCapturedAt,
     row.lastCapturedAt,
+    row.productionFrom,
+    row.productionTo,
     row.eraDescription,
     row.sources.join(';'),
     RECORD_FITMENT,
@@ -171,6 +180,8 @@ function mappingCells(m: QuoteMapping): unknown[] {
     undefined, // Times Copied
     m.firstSeen,
     m.lastSeen,
+    undefined, // Production From (on the vehicle's fitment rows)
+    undefined, // Production To
     m.eraDescription,
     undefined, // Sources
     RECORD_QUOTE_MAPPING,
@@ -334,6 +345,8 @@ export async function importCsv(text: string): Promise<ImportResult> {
     timesCopied: colIndex('times copied'),
     firstCaptured: colIndex('first captured'),
     lastCaptured: colIndex('last captured'),
+    productionFrom: colIndex('production from'),
+    productionTo: colIndex('production to'),
     eraDescription: colIndex('era description'),
     sources: colIndex('sources'),
     recordType: colIndex('record type'),
@@ -411,6 +424,8 @@ export async function importCsv(text: string): Promise<ImportResult> {
         option: cell(row, col.option) ?? existingVehicle?.option,
         exteriorColor: cell(row, col.exteriorColor) ?? existingVehicle?.exteriorColor,
         interiorColor: cell(row, col.interiorColor) ?? existingVehicle?.interiorColor,
+        productionFrom: cell(row, col.productionFrom) ?? existingVehicle?.productionFrom,
+        productionTo: cell(row, col.productionTo) ?? existingVehicle?.productionTo,
         rawText: existingVehicle?.rawText ?? '',
         firstSeen: existingVehicle?.firstSeen ?? firstCapturedAt,
         lastSeen:

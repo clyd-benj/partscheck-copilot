@@ -227,6 +227,40 @@ describe("CSV/JSON export and import with quote mappings", () => {
     expect(header).toContain("Record Type");
   });
 
+  it("exports and re-imports ASA CAPS production dates", async () => {
+    await processClipboardText(
+      "ASX(MMAL) 2000 | LS(2WD),S-CVT VIN: JMFXTGA2WBZ003283 Model: GA2W Classification: XTSHR8 " +
+        "Option: M09 Exterior: X42A Interior: 22X From: 2010.12.3 To: 2011.2.14",
+    );
+    await processClipboardText("5253AN28");
+    const csv = await exportCsvText();
+    // Last Captured, then Production From and Production To.
+    expect(csv.split("\n")[0]).toContain("Last Captured,Production From,Production To,");
+    expect(csv).toMatch(/Z,2010\.12\.3,2011\.2\.14,/);
+
+    await resetDb();
+    await importCsv(csv);
+    expect(await AsaCapsDatabase.getVehicle("JMFXTGA2WBZ003283")).toMatchObject({
+      productionFrom: "2010.12.3",
+      productionTo: "2011.2.14",
+    });
+  });
+
+  it("keeps a vehicle's production dates when importing a CSV without those columns", async () => {
+    await AsaCapsDatabase.putVehicle({
+      id: "JMFXTGF8WLJ003875",
+      vin: "JMFXTGF8WLJ003875",
+      productionFrom: "2019.4.1",
+      rawText: "",
+      firstSeen: NOW,
+      lastSeen: NOW,
+    });
+    const legacy =
+      "VIN,Make,Model,Part Number,Description\nJMFXTGF8WLJ003875,Mitsubishi,ASX,5253AN28,SILL PANEL";
+    await importCsv(legacy);
+    expect((await AsaCapsDatabase.getVehicle("JMFXTGF8WLJ003875"))?.productionFrom).toBe("2019.4.1");
+  });
+
   it("still imports a CSV exported before quote capture existed", async () => {
     const legacy =
       "VIN,Make,Model,Part Number,PNC,Description,Times Copied,First Captured,Last Captured\n" +
