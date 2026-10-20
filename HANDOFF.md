@@ -601,7 +601,7 @@ npm run build      # tsc -b && vite build -> dist/
 npm run dev        # Vite watch mode with HMR; load dist/ as unpacked, refresh on changes
 npm run lint       # eslint . --max-warnings 0
 npm run typecheck  # tsc -b only
-npm test           # vitest run — 15 files, 138 tests, all currently passing
+npm test           # vitest run — 16 files, 155 tests, all currently passing
 npm run test:watch
 npm run format     # prettier --write .
 ```
@@ -813,3 +813,40 @@ carry the quote mappings.
   `['imported']`), upserts mappings by id keeping the widest first/last seen, and now keeps a
   `Times Copied` of 0. JSON export is now `{ fitments, quoteMappings }` (was a bare array;
   there is no JSON import). The hourly auto-backup CSV includes the mappings too.
+
+### 9.5 Only DMS-uploaded rows are answers; repairer-supplied numbers kept apart
+
+User report: repairers often type into PartsCheck's Part Number boxes themselves before the
+quote reaches the interpreter — usually a base-model or wrong number, sometimes free text
+("triton bagde"). Treating any filled Part Number as an answer polluted quoteMappings and
+suggestions. Rules now:
+
+- **Verified = post-upload structure.** `QuoteRow.fromDmsUpload` is true only when the
+  description cell is `<b>ERA DESCRIPTION</b><br/><i>repairer text</i>` (§9.1). A filled
+  Part Number in a plain `<b>repairer text</b>` row is repairer-supplied. Only verified rows
+  become quoteMappings (`isVerifiedRow` in buildMappings.ts), and so only they reach
+  fitments and suggestions.
+- **No hand-edit capture.** The change/input listeners on `#lineTable` were removed; capture
+  runs on page load (DMS Upload reloads the page; reopened uploaded quotes are read the same
+  way). The MutationObserver stays for structural changes, and every input is read via
+  **`defaultValue`** (the server-rendered `value` attribute), so even an observer-triggered
+  re-read can never pick up what's been typed into a box.
+- **`repairerSupplied` store** (asa-caps-catalogue DB **v4**, keyPath `id` =
+  `${quoteKey}::${rowNo}` like mappings; indexes quoteKey, vin). `updateRepairerSupplied()`
+  upserts each repairer-filled row (`suppliedValue` uppercased, `looksLikePartNumber` via
+  `looksLikePartNumber()` exported from the ASA `part-parser.ts` patterns) and, when the same
+  quote is later read after DMS Upload, links the row's verified number
+  (`verifiedPartNumber`, `verifiedEraDescription`, `verifiedNoGenuinePart`,
+  `matchesVerified`, `linkedAt`). Links are never undone. These correction pairs are for a
+  later feature — **nothing reads them for suggestions yet**, and they're not in the CSV
+  export/backup yet.
+- A page with only repairer-supplied rows creates no mappings, fitments or vehicle record.
+- Suggestions are now requested for every line without a DMS-uploaded answer, including
+  lines the repairer pre-filled.
+- Sidebar "Part Number Capture": "N verified rows captured, M repairer-supplied rows
+  ignored"; the row-count mismatch warning compares verified rows to requested lines.
+- Fixture `tests/fixtures/partscheck/quote-prefilled.html` is **synthetic** (quote-empty
+  with six repairer-style values: wrong number, correct number, lowercase correct number,
+  free text ×2, a number on a line ERA later answers NA). Replace/add a real Ctrl+S save of
+  a repairer-prefilled quote when the user provides one. Tests: `repairer-supplied.test.ts`
+  plus updates in quote-rows / quote-capture-watcher.

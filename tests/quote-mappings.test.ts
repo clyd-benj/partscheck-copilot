@@ -79,7 +79,9 @@ describe("buildQuoteMappings", () => {
       accessories: 1,
       sideConflicts: [],
       requestedLines: 19,
-      filledRows: 19,
+      verifiedRows: 19,
+      repairerSuppliedRows: 0,
+      repairerSuppliedLinked: 0,
     });
   });
 });

@@ -34,6 +34,11 @@ function matchesPartPattern(token: string): boolean {
   return PART_NUMBER_PATTERNS.some((pattern) => pattern.test(normalised));
 }
 
+/** Whether a whole value (e.g. a Part Number box on PartsCheck) has a recognised part-number shape. */
+export function looksLikePartNumber(value: string): boolean {
+  return value.trim() !== '' && matchesPartPattern(value);
+}
+
 function findPartToken(line: string): { partNumber: string; rest: string } | null {
   const tokens = line.split(/\s+/).filter(Boolean);
   for (let i = 0; i < tokens.length; i++) {

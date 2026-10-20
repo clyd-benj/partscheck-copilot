@@ -25,6 +25,7 @@ describe("extractQuoteRows — after DMS Upload", () => {
       draftItemId: "147735272",
       repairerDescription: "L/H/F GUARD",
       eraDescription: "FENDERFR LH",
+      fromDmsUpload: true,
       partNumber: "5220AX75",
       qty: 1,
       listPrice: 671.25,
@@ -56,6 +57,28 @@ describe("extractQuoteRows — before DMS Upload", () => {
     expect(rows.every((r) => r.partNumber === "" && r.eraDescription === undefined)).toBe(true);
     expect(rows[1].repairerDescription).toBe("L/H/F GUARD");
     expect(rows[1].listPrice).toBeUndefined(); // Qty is pre-filled with 1 by PartsCheck
+  });
+});
+
+describe("extractQuoteRows — repairer-prefilled part numbers", () => {
+  const rows = extractQuoteRows(loadQuotePage("quote-prefilled"));
+
+  it("reads the repairer's values but marks no row as DMS-uploaded", () => {
+    expect(rows.every((r) => !r.fromDmsUpload && r.eraDescription === undefined)).toBe(true);
+    expect(rows.filter((r) => r.partNumber !== "").map((r) => [r.rowNo, r.partNumber])).toEqual([
+      [1, "6400B123"],
+      [2, "5220AX74"],
+      [8, "96111A000P"],
+      [10, "TRITON BAGDE"],
+      [13, "MR992372"],
+      [19, "TBA"],
+    ]);
+  });
+
+  it("reads server-rendered values, never what's typed into the box", () => {
+    const doc = loadQuotePage("quote-filled");
+    doc.querySelector<HTMLInputElement>('input.partNr[data-draft_item_id="147735272"]')!.value = "HAND TYPED";
+    expect(extractQuoteRows(doc)[1].partNumber).toBe("5220AX75");
   });
 });
 

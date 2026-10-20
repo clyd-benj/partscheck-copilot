@@ -2,6 +2,7 @@ import {
   buildQuoteFitments,
   buildQuoteMappings,
   summariseCapture,
+  updateRepairerSupplied,
   vehicleFromQuote,
 } from './buildMappings';
 import {
@@ -14,11 +15,12 @@ import { AsaCapsDatabase } from '@/storage/asacapsDb';
 import type { QuoteCaptureResult, QuoteContext, QuoteRow } from '@/types/quoteMapping';
 
 /**
- * Background-side half of the PartsCheck quote capture: enriches the rows
- * read by the content script with the model code from the ASA CAPS
- * catalogue (by VIN), upserts them into `quoteMappings`, and adds the
- * quoted part numbers to the catalogue as fitments for the VIN. Must only
- * run in an extension-origin context (see src/storage/asacapsDb.ts).
+ * Background-side half of the PartsCheck quote capture: enriches the
+ * DMS-uploaded (verified) rows read by the content script with the model
+ * code from the ASA CAPS catalogue (by VIN), upserts them into
+ * `quoteMappings`, and adds them to the catalogue as fitments for the VIN.
+ * Rows the repairer filled in themselves only go to `repairerSupplied`.
+ * Must only run in an extension-origin context (see src/storage/asacapsDb.ts).
  */
 export async function captureQuote(
   context: QuoteContext,
@@ -35,23 +37,37 @@ export async function captureQuote(
   });
   await AsaCapsDatabase.putQuoteMappings(mappings);
 
-  // Feed the ASA CAPS catalogue too: each quoted part becomes a fitment for
-  // this VIN, and an unknown VIN gets a basic vehicle record.
-  if (context.vin) {
-    if (!vehicle) {
-      const created = vehicleFromQuote(context, now);
-      if (created) await AsaCapsDatabase.putVehicle(created);
-    }
+  // Part numbers the repairer typed in are never answers; keep them, and
+  // pair them with the verified number once this quote has been uploaded.
+  const storedSupplied = await AsaCapsDatabase.listRepairerSuppliedForQuote(context.quoteKey);
+  const changedSupplied = updateRepairerSupplied(
+    context,
+    rows,
+    mappings,
+    new Map(storedSupplied.map((record) => [record.id, record])),
+    now,
+  );
+  await AsaCapsDatabase.putRepairerSupplied(changedSupplied);
+  const allSupplied = new Map(storedSupplied.map((record) => [record.id, record]));
+  for (const record of changedSupplied) allSupplied.set(record.id, record);
+
+  // Feed the ASA CAPS catalogue too: each verified part becomes a fitment
+  // for this VIN, and an unknown VIN gets a basic vehicle record.
+  if (context.vin && mappings.length > 0) {
     const existingFitments = await AsaCapsDatabase.listFitmentsForVin(context.vin);
     const fitments = buildQuoteFitments(
       mappings,
       new Map(existingFitments.map((fitment) => [fitment.id, fitment])),
       now,
     );
+    if (fitments.length > 0 && !vehicle) {
+      const created = vehicleFromQuote(context, now);
+      if (created) await AsaCapsDatabase.putVehicle(created);
+    }
     for (const fitment of fitments) await AsaCapsDatabase.putFitment(fitment);
   }
 
-  return summariseCapture(context, rows, mappings);
+  return summariseCapture(context, rows, mappings, Array.from(allSupplied.values()));
 }
 
 /**

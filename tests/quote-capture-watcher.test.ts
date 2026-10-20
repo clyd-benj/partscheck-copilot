@@ -8,12 +8,14 @@ function fakeSave() {
   return vi.fn(
     async (context: QuoteContext, rows: QuoteRow[]): Promise<QuoteCaptureResult> => ({
       quoteKey: context.quoteKey,
-      mappings: rows.filter((r) => r.partNumber !== "" && r.partNumber !== "NA").length,
+      mappings: rows.filter((r) => r.fromDmsUpload && r.partNumber !== "" && r.partNumber !== "NA").length,
       noGenuinePart: 0,
       accessories: 0,
       sideConflicts: [],
       requestedLines: rows.length,
-      filledRows: rows.filter((r) => r.partNumber !== "").length,
+      verifiedRows: rows.filter((r) => r.fromDmsUpload && r.partNumber !== "").length,
+      repairerSuppliedRows: rows.filter((r) => !r.fromDmsUpload && r.partNumber !== "").length,
+      repairerSuppliedLinked: 0,
     }),
   );
 }
@@ -35,7 +37,7 @@ describe("startQuoteCaptureWatcher", () => {
     await vi.runAllTimersAsync();
 
     expect(save).toHaveBeenCalledTimes(1);
-    expect(store.get()).toMatchObject({ state: "saved", result: { mappings: 12, filledRows: 19 } });
+    expect(store.get()).toMatchObject({ state: "saved", result: { mappings: 12, verifiedRows: 19 } });
   });
 
   it("doesn't save an unfilled quote", async () => {
@@ -48,42 +50,53 @@ describe("startQuoteCaptureWatcher", () => {
     expect(store.get()).toEqual({ state: "empty", requestedLines: 19 });
   });
 
-  it("re-saves when the table changes, but not when nothing did", async () => {
+  it("never captures hand edits", async () => {
     const doc = loadQuotePage("quote-filled");
     const save = fakeSave();
     startQuoteCaptureWatcher(createQuoteCaptureStore(), save, doc);
     await vi.runAllTimersAsync();
+    expect(save).toHaveBeenCalledTimes(1);
 
-    const table = doc.getElementById("lineTable")!;
-    table.dispatchEvent(new Event("change", { bubbles: true }));
+    // Typing into a Part Number box: no listener fires a capture...
+    const partInput = doc.querySelector<HTMLInputElement>('input.partNr[data-draft_item_id="147735272"]')!;
+    partInput.value = "5220AX76";
+    partInput.dispatchEvent(new Event("input", { bubbles: true }));
+    partInput.dispatchEvent(new Event("change", { bubbles: true }));
     await vi.runAllTimersAsync();
     expect(save).toHaveBeenCalledTimes(1);
 
-    const partInput = doc.querySelector<HTMLInputElement>('input.partNr[data-draft_item_id="147735272"]')!;
-    partInput.value = "5220AX76";
-    partInput.dispatchEvent(new Event("change", { bubbles: true }));
+    // ...and if PartsCheck's own script touches the row (an observed DOM
+    // change), the re-read still sees the server-rendered value, so nothing new is saved.
+    doc.querySelector('tr.lineRow[data-draft_item_id="147735272"]')!.setAttribute("data-touched", "1");
     await vi.runAllTimersAsync();
-    expect(save).toHaveBeenCalledTimes(2);
-    expect(save.mock.calls[1][1][1].partNumber).toBe("5220AX76");
+    expect(save).toHaveBeenCalledTimes(1);
   });
 
-  it("debounces a burst of DOM mutations into one save", async () => {
+  it("captures a fill that rebuilds the table in place, debounced into one save", async () => {
     const doc = loadQuotePage("quote-empty");
     const save = fakeSave();
     startQuoteCaptureWatcher(createQuoteCaptureStore(), save, doc);
     await vi.runAllTimersAsync();
+    expect(save).not.toHaveBeenCalled();
 
-    // Simulate a fill: set each part number and touch the row so the observer fires.
-    const filled = loadQuotePage("quote-filled");
-    for (const input of doc.querySelectorAll<HTMLInputElement>("input.partNr")) {
-      const id = input.getAttribute("data-draft_item_id");
-      input.value = filled.querySelector<HTMLInputElement>(`input.partNr[data-draft_item_id="${id}"]`)!.value;
-      input.setAttribute("value", input.value);
-    }
+    doc.getElementById("lineTable")!.innerHTML = loadQuotePage("quote-filled").getElementById("lineTable")!.innerHTML;
     await vi.runAllTimersAsync();
 
     expect(save).toHaveBeenCalledTimes(1);
-    expect(save.mock.calls[0][1].filter((r) => r.partNumber !== "")).toHaveLength(19);
+    expect(save.mock.calls[0][1].filter((r) => r.fromDmsUpload && r.partNumber !== "")).toHaveLength(19);
+  });
+
+  it("sends a repairer-prefilled quote so its values are stored, flagged as not uploaded", async () => {
+    const store = createQuoteCaptureStore();
+    const save = fakeSave();
+    startQuoteCaptureWatcher(store, save, loadQuotePage("quote-prefilled"));
+    await vi.runAllTimersAsync();
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(store.get()).toMatchObject({
+      state: "saved",
+      result: { mappings: 0, verifiedRows: 0, repairerSuppliedRows: 6 },
+    });
   });
 
   it("reports an unreachable background", async () => {

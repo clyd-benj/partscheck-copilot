@@ -18,10 +18,10 @@ import type {
   BackupState,
 } from '@/types/asacaps';
 import { DEFAULT_SETTINGS } from '@/types/asacaps';
-import type { QuoteMapping } from '@/types/quoteMapping';
+import type { QuoteMapping, RepairerSuppliedPart } from '@/types/quoteMapping';
 
 const DB_NAME = 'asa-caps-catalogue';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 const STORE_VEHICLES = 'vehicles';
 const STORE_SESSIONS = 'sessions';
@@ -30,6 +30,7 @@ const STORE_EVENTS = 'events';
 const STORE_SETTINGS = 'settings';
 const STORE_BACKUP = 'backup';
 const STORE_QUOTE_MAPPINGS = 'quoteMappings';
+const STORE_REPAIRER_SUPPLIED = 'repairerSupplied';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -80,6 +81,14 @@ function openDatabase(): Promise<IDBDatabase> {
         store.createIndex('modelCode', 'modelCode', { unique: false });
         store.createIndex('model', 'model', { unique: false });
       }
+
+      // v4: part numbers repairers typed into PartsCheck themselves, paired
+      // with the verified number after DMS Upload (never used as answers).
+      if (!db.objectStoreNames.contains(STORE_REPAIRER_SUPPLIED)) {
+        const store = db.createObjectStore(STORE_REPAIRER_SUPPLIED, { keyPath: 'id' });
+        store.createIndex('quoteKey', 'quoteKey', { unique: false });
+        store.createIndex('vin', 'vin', { unique: false });
+      }
     };
 
     request.onsuccess = () => resolve(request.result);
@@ -120,6 +129,20 @@ async function getAll<T>(storeName: string): Promise<T[]> {
   const tx = db.transaction(storeName, 'readonly');
   const store = tx.objectStore(storeName);
   return promisifyRequest(store.getAll());
+}
+
+/** Puts many records in one transaction; resolves once it has committed. */
+async function putAll<T>(storeName: string, records: T[]): Promise<void> {
+  if (records.length === 0) return;
+  const db = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    const store = tx.objectStore(storeName);
+    for (const record of records) store.put(record);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
 }
 
 export const AsaCapsDatabase = {
@@ -249,16 +272,21 @@ export const AsaCapsDatabase = {
   },
   /** Upserts by id (quote key + row number), so re-reading a quote never duplicates rows. */
   async putQuoteMappings(mappings: QuoteMapping[]): Promise<void> {
-    if (mappings.length === 0) return;
+    await putAll(STORE_QUOTE_MAPPINGS, mappings);
+  },
+
+  // Repairer-supplied part numbers (keyed like quote mappings)
+  async listRepairerSupplied(): Promise<RepairerSuppliedPart[]> {
+    return getAll<RepairerSuppliedPart>(STORE_REPAIRER_SUPPLIED);
+  },
+  async listRepairerSuppliedForQuote(quoteKey: string): Promise<RepairerSuppliedPart[]> {
     const db = await openDatabase();
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE_QUOTE_MAPPINGS, 'readwrite');
-      const store = tx.objectStore(STORE_QUOTE_MAPPINGS);
-      for (const mapping of mappings) store.put(mapping);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
-    });
+    const tx = db.transaction(STORE_REPAIRER_SUPPLIED, 'readonly');
+    const index = tx.objectStore(STORE_REPAIRER_SUPPLIED).index('quoteKey');
+    return promisifyRequest(index.getAll(quoteKey));
+  },
+  async putRepairerSupplied(records: RepairerSuppliedPart[]): Promise<void> {
+    await putAll(STORE_REPAIRER_SUPPLIED, records);
   },
 };
 

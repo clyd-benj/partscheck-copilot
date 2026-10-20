@@ -28,8 +28,9 @@ export function QuoteCaptureSection({ store }: QuoteCaptureSectionProps) {
       {status.state === 'saved' && (
         <>
           <p className="px-4 py-1.5 text-sm text-neutral-900 dark:text-neutral-100">
-            Captured {status.result.mappings} mapping{status.result.mappings === 1 ? '' : 's'} from
-            this quote
+            {status.result.verifiedRows} verified row{status.result.verifiedRows === 1 ? '' : 's'}{' '}
+            captured, {status.result.repairerSuppliedRows} repairer-supplied row
+            {status.result.repairerSuppliedRows === 1 ? '' : 's'} ignored
             {status.result.noGenuinePart > 0 && (
               <span className="text-neutral-500 dark:text-neutral-400">
                 {' '}
@@ -37,12 +38,13 @@ export function QuoteCaptureSection({ store }: QuoteCaptureSectionProps) {
               </span>
             )}
           </p>
-          {status.result.filledRows !== status.result.requestedLines && (
-            <p className={WARNING}>
-              {status.result.filledRows} of {status.result.requestedLines} requested lines have a
-              part number — check the ERA lines match the PartsCheck order.
-            </p>
-          )}
+          {status.result.verifiedRows > 0 &&
+            status.result.verifiedRows !== status.result.requestedLines && (
+              <p className={WARNING}>
+                {status.result.verifiedRows} of {status.result.requestedLines} requested lines were
+                filled by DMS Upload — check the ERA lines match the PartsCheck order.
+              </p>
+            )}
           {status.result.sideConflicts.map((mapping) => (
             <p key={mapping.id} className={WARNING}>
               Line {mapping.rowNo}: "{mapping.repairerDescription}" is {mapping.side} but ERA has "

@@ -6,8 +6,10 @@ const DIR = join(__dirname, "fixtures", "partscheck");
 /**
  * Trimmed, anonymised saves of one real PartsCheck quote (draftID replaced
  * by 10000001), before and after DMS Upload of the ERA CSV below.
+ * quote-prefilled is synthetic: quote-empty with repairer-typed values in six
+ * Part Number boxes.
  */
-export function loadQuotePage(name: "quote-filled" | "quote-empty"): Document {
+export function loadQuotePage(name: "quote-filled" | "quote-empty" | "quote-prefilled"): Document {
   const html = readFileSync(join(DIR, `${name}.html`), "utf8");
   return new DOMParser().parseFromString(html, "text/html");
 }

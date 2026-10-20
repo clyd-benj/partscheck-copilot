@@ -3,10 +3,12 @@ import { createValueStore, type ValueStore } from './valueStore';
 import type { QuoteCaptureResult, QuoteContext, QuoteRow } from '@/types/quoteMapping';
 
 /**
- * Watches the PartsCheck quote table and saves its filled rows (via the
- * background worker) whenever they change: on load when reopening an
- * already-priced quote, and when DMS Upload fills the table. Read-only —
- * it never writes into PartsCheck's inputs or submits anything.
+ * Reads the PartsCheck quote table on page load (DMS Upload reloads the page,
+ * and reopened uploaded quotes are read the same way) and sends its filled
+ * rows to the background worker. Only DMS-uploaded rows become mappings;
+ * rows the repairer typed a part number into are stored separately. Hand
+ * edits never trigger a capture. Read-only — it never writes into
+ * PartsCheck's inputs or submits anything.
  */
 
 const LOG_PREFIX = '[Parts Interpreter Toolkit]';
@@ -47,7 +49,9 @@ export function startQuoteCaptureWatcher(
 
     const rows = extractQuoteRows(root);
     const requestedLines = rows.filter((row) => row.iteration === 0).length;
-    const filledRows = rows.filter((row) => row.iteration === 0 && row.partNumber !== '').length;
+    // Verified (DMS-uploaded) and repairer-typed part numbers both go to the
+    // background, which keeps them apart; nothing filled means nothing to do.
+    const filledRows = rows.filter((row) => row.partNumber !== '').length;
     if (filledRows === 0) {
       store.set({ state: 'empty', requestedLines });
       return;
@@ -69,7 +73,8 @@ export function startQuoteCaptureWatcher(
       lastSavedFingerprint = fingerprint;
       console.log(
         LOG_PREFIX,
-        `captured ${result.mappings} mappings from quote ${context.quoteKey}`,
+        `quote ${context.quoteKey}: ${result.verifiedRows} verified rows captured, ` +
+          `${result.repairerSuppliedRows} repairer-supplied rows ignored`,
         result,
       );
       store.set({ state: 'saved', result });
@@ -88,16 +93,16 @@ export function startQuoteCaptureWatcher(
   let observer: MutationObserver | undefined;
   if (table) {
     observer = new MutationObserver(schedule);
+    // Structural changes only. There are deliberately no change/input
+    // listeners: hand edits must never trigger a capture (and rows are read
+    // from their server-rendered values anyway). DMS Upload reloads the page,
+    // so the capture on load below is what picks it up.
     observer.observe(table, {
       childList: true,
       subtree: true,
       attributes: true,
       characterData: true,
     });
-    // Script-set input values don't mutate the DOM; PartsCheck's own inputs
-    // fire change/input when edited, so listen for those too (passively).
-    table.addEventListener('change', schedule, { capture: true, passive: true });
-    table.addEventListener('input', schedule, { capture: true, passive: true });
   } else {
     console.warn(
       LOG_PREFIX,
@@ -110,7 +115,5 @@ export function startQuoteCaptureWatcher(
   return () => {
     clearTimeout(timer);
     observer?.disconnect();
-    table?.removeEventListener('change', schedule, { capture: true });
-    table?.removeEventListener('input', schedule, { capture: true });
   };
 }

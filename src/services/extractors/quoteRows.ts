@@ -7,7 +7,9 @@ import type { QuoteContext, QuoteRow } from '@/types/quoteMapping';
  * a `tr.lineRow` with `data-draft_item_id` / `data-iteration` /
  * `data-print_order` / `data-parttext`; once filled, its description cell is
  * `<b>ERA DESCRIPTION</b><br/><i>repairer description</i>` and the
- * Part Number / Qty / List / Buy inputs carry values. "Note for Purchaser"
+ * Part Number / Qty / List / Buy inputs carry values. Repairers can also
+ * pre-fill Part Number themselves; those rows keep the plain `<b>` cell and
+ * are flagged `fromDmsUpload: false`. "Note for Purchaser"
  * lives in a sibling `tr.notesRow` with the same data attributes. The blue
  * `tr.lineRowPriceMatch` and grey `tr.compRow` rows have no `lineRow` class,
  * so they're never matched.
@@ -42,6 +44,11 @@ function nonEmpty(value: string | null | undefined): string | undefined {
   return collapsed.length > 0 ? collapsed : undefined;
 }
 
+/**
+ * Reads an input's server-rendered value (its `value` attribute), not what's
+ * currently typed in it: PartsCheck renders saved and DMS-uploaded values
+ * into the HTML, and hand edits must never be captured.
+ */
 function readRowInput(row: Element, className: string, rowNo: number): string | undefined {
   const selector = `input.${className}`;
   const input = row.querySelector<HTMLInputElement>(selector);
@@ -49,7 +56,7 @@ function readRowInput(row: Element, className: string, rowNo: number): string | 
     logMissing(`row ${rowNo} ${className} input`, selector);
     return undefined;
   }
-  return input.value;
+  return input.defaultValue;
 }
 
 /** Every visible part row (filled or not) in on-page order. */
@@ -86,11 +93,14 @@ export function extractQuoteRows(root: ParentNode = document): QuoteRow[] {
     const repairerDescription =
       nonEmpty(row.getAttribute('data-parttext')) ?? italicText ?? boldText ?? '';
     // Before DMS Upload the bold line *is* the repairer text; the ERA
-    // description only appears once the italic repairer line is added under it.
-    const eraDescription = italicText ? boldText : undefined;
+    // description only appears once the italic repairer line is added under
+    // it. That structure is the only sign a part number came from ERA rather
+    // than being typed in by the repairer.
+    const fromDmsUpload = boldText !== undefined && italicText !== undefined;
+    const eraDescription = fromDmsUpload ? boldText : undefined;
 
     const notesSelector = `tr.notesRow[data-draft_item_id="${draftItemId}"][data-iteration="${iteration}"] input.notes`;
-    const note = nonEmpty(table.querySelector<HTMLInputElement>(notesSelector)?.value);
+    const note = nonEmpty(table.querySelector<HTMLInputElement>(notesSelector)?.defaultValue);
 
     rows.push({
       rowNo,
@@ -98,6 +108,7 @@ export function extractQuoteRows(root: ParentNode = document): QuoteRow[] {
       draftItemId,
       repairerDescription,
       eraDescription,
+      fromDmsUpload,
       partNumber: collapseWhitespace(readRowInput(row, 'partNr', rowNo) ?? '').toUpperCase(),
       qty: parseNumber(readRowInput(row, 'qty', rowNo)),
       listPrice: parseNumber(readRowInput(row, 'listprice', rowNo)),

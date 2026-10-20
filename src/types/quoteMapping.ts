@@ -16,8 +16,15 @@ export interface QuoteRow {
   repairerDescription: string;
   /** Bold ERA description shown once the row is filled (commas stripped, truncated). */
   eraDescription?: string;
-  /** Part Number input, '' when the row hasn't been filled yet. */
+  /** Part Number input as rendered by PartsCheck, '' when empty. */
   partNumber: string;
+  /**
+   * The description cell has the post-DMS-Upload structure
+   * `<b>ERA DESCRIPTION</b><br/><i>repairer text</i>`, so the part number
+   * came from ERA. Without it, a filled Part Number was typed in by the
+   * repairer and is not a verified answer.
+   */
+  fromDmsUpload: boolean;
   qty?: number;
   listPrice?: number;
   buyPrice?: number;
@@ -88,16 +95,57 @@ export interface QuoteMapping {
   lastSeen: string;
 }
 
+/**
+ * A part number the repairer typed into PartsCheck themselves before the
+ * quote was priced (often a base-model or wrong number, sometimes free
+ * text). Never a mapping or a suggestion; kept so it can be paired with the
+ * verified number once the same quote is DMS-uploaded — correction pairs
+ * for a later feature.
+ */
+export interface RepairerSuppliedPart {
+  /** Same id scheme as QuoteMapping: `${quoteKey}::${rowNo}`. */
+  id: string;
+  quoteKey: string;
+  draftId?: string;
+  reference?: string;
+  rowNo: number;
+  iteration: number;
+  draftItemId: string;
+  repairerDescription: string;
+  repairerNormalised: string;
+  side: Side;
+  /** What was in the Part Number box (uppercased, whitespace collapsed). */
+  suppliedValue: string;
+  /** Matches one of the ASA CAPS part-number patterns (vs free text like "TRITON BAGDE"). */
+  looksLikePartNumber: boolean;
+  vin?: string;
+  make?: string;
+  model?: string;
+  /** Set once the same row is seen after DMS Upload. */
+  verifiedPartNumber?: string;
+  verifiedEraDescription?: string;
+  verifiedNoGenuinePart?: boolean;
+  /** The repairer's value equals the verified number (ignoring spaces). */
+  matchesVerified?: boolean;
+  linkedAt?: string;
+  firstSeen: string;
+  lastSeen: string;
+}
+
 /** What a capture saved, reported back to the PartsCheck panel. */
 export interface QuoteCaptureResult {
   quoteKey: string;
-  /** Rows saved as real mappings (excludes NA rows). */
+  /** Verified rows saved as real mappings (excludes NA rows). */
   mappings: number;
   noGenuinePart: number;
   accessories: number;
   sideConflicts: QuoteMapping[];
   /** Visible requested lines on the page. */
   requestedLines: number;
-  /** Rows with a Part Number filled in (including NA). */
-  filledRows: number;
+  /** Rows filled by DMS Upload (including NA). */
+  verifiedRows: number;
+  /** Rows with a part number the repairer typed in — ignored as answers. */
+  repairerSuppliedRows: number;
+  /** Repairer-supplied values on this quote now paired with a verified number. */
+  repairerSuppliedLinked: number;
 }

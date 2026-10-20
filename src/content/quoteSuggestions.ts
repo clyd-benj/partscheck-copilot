@@ -4,7 +4,7 @@ import type { LineSuggestions, SuggestionLine } from '@/services/quoteCapture/su
 
 /**
  * Asks the background worker for part-number suggestions for the open
- * quote's lines that don't have a part number yet. Display only — the
+ * quote's lines that haven't been DMS-uploaded yet. Display only — the
  * sidebar offers copy buttons; nothing is written into PartsCheck.
  */
 
@@ -30,7 +30,9 @@ export async function loadQuoteSuggestions(
 ): Promise<void> {
   const context = extractQuoteContext(root);
   const lines = extractQuoteRows(root)
-    .filter((row) => row.iteration === 0 && row.partNumber === '')
+    // Lines without a DMS-uploaded answer — including ones the repairer
+    // pre-filled with their own (unverified) number.
+    .filter((row) => row.iteration === 0 && !row.fromDmsUpload)
     .map((row) => ({ id: row.draftItemId, description: row.repairerDescription }));
 
   if (lines.length === 0) {
