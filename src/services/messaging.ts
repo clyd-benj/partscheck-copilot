@@ -1,6 +1,7 @@
 import type { AddCustomerResult } from '@/storage/customerDb';
 import type { CustomerRecord } from '@/types/customer';
 import type { PartFitment, Settings, Vehicle, VehicleSession } from '@/types/asacaps';
+import type { QuoteCaptureResult, QuoteContext, QuoteRow } from '@/types/quoteMapping';
 
 /**
  * Content scripts run in the host page's origin (PartsCheck or ASA CAPS),
@@ -19,6 +20,7 @@ const SET_VEHICLE_MANUALLY_MESSAGE_TYPE = 'SET_VEHICLE_MANUALLY';
 const CLOSE_ACTIVE_SESSION_MESSAGE_TYPE = 'CLOSE_ACTIVE_SESSION';
 const GET_SETTINGS_MESSAGE_TYPE = 'GET_SETTINGS';
 const SET_CAPTURE_ENABLED_MESSAGE_TYPE = 'SET_CAPTURE_ENABLED';
+const SAVE_QUOTE_CAPTURE_MESSAGE_TYPE = 'SAVE_QUOTE_CAPTURE';
 
 interface GetCustomersMessage {
   type: typeof GET_CUSTOMERS_MESSAGE_TYPE;
@@ -60,6 +62,12 @@ interface SetCaptureEnabledMessage {
   captureEnabled: boolean;
 }
 
+interface SaveQuoteCaptureMessage {
+  type: typeof SAVE_QUOTE_CAPTURE_MESSAGE_TYPE;
+  context: QuoteContext;
+  rows: QuoteRow[];
+}
+
 export type RuntimeMessage =
   | GetCustomersMessage
   | AddCustomerMessage
@@ -69,7 +77,8 @@ export type RuntimeMessage =
   | SetVehicleManuallyMessage
   | CloseActiveSessionMessage
   | GetSettingsMessage
-  | SetCaptureEnabledMessage;
+  | SetCaptureEnabledMessage
+  | SaveQuoteCaptureMessage;
 
 function hasType(message: unknown, type: string): boolean {
   return typeof message === 'object' && message !== null && (message as { type?: unknown }).type === type;
@@ -109,6 +118,10 @@ export function isGetSettingsMessage(message: unknown): message is GetSettingsMe
 
 export function isSetCaptureEnabledMessage(message: unknown): message is SetCaptureEnabledMessage {
   return hasType(message, SET_CAPTURE_ENABLED_MESSAGE_TYPE);
+}
+
+export function isSaveQuoteCaptureMessage(message: unknown): message is SaveQuoteCaptureMessage {
+  return hasType(message, SAVE_QUOTE_CAPTURE_MESSAGE_TYPE);
 }
 
 // --- Customer database (content script ↔ background) ---
@@ -172,4 +185,16 @@ export async function requestSetCaptureEnabled(captureEnabled: boolean): Promise
   const message: SetCaptureEnabledMessage = { type: SET_CAPTURE_ENABLED_MESSAGE_TYPE, captureEnabled };
   const response = (await chrome.runtime.sendMessage(message)) as Settings | undefined;
   return response ?? { logUnknownEvents: false, captureEnabled, debugMode: false };
+}
+
+// --- PartsCheck quote capture (content script ↔ background) ---
+
+/** Saves the filled rows of the open quote; null if the background couldn't be reached. */
+export async function requestSaveQuoteCapture(
+  context: QuoteContext,
+  rows: QuoteRow[],
+): Promise<QuoteCaptureResult | null> {
+  const message: SaveQuoteCaptureMessage = { type: SAVE_QUOTE_CAPTURE_MESSAGE_TYPE, context, rows };
+  const response = (await chrome.runtime.sendMessage(message)) as QuoteCaptureResult | undefined;
+  return response ?? null;
 }

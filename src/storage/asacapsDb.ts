@@ -18,9 +18,10 @@ import type {
   BackupState,
 } from '@/types/asacaps';
 import { DEFAULT_SETTINGS } from '@/types/asacaps';
+import type { QuoteMapping } from '@/types/quoteMapping';
 
 const DB_NAME = 'asa-caps-catalogue';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 const STORE_VEHICLES = 'vehicles';
 const STORE_SESSIONS = 'sessions';
@@ -28,6 +29,7 @@ const STORE_FITMENTS = 'fitments';
 const STORE_EVENTS = 'events';
 const STORE_SETTINGS = 'settings';
 const STORE_BACKUP = 'backup';
+const STORE_QUOTE_MAPPINGS = 'quoteMappings';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -66,6 +68,17 @@ function openDatabase(): Promise<IDBDatabase> {
 
       if (!db.objectStoreNames.contains(STORE_BACKUP)) {
         db.createObjectStore(STORE_BACKUP, { keyPath: 'key' });
+      }
+
+      // v3: repairer description → part number pairs learned from PartsCheck quotes.
+      if (!db.objectStoreNames.contains(STORE_QUOTE_MAPPINGS)) {
+        const store = db.createObjectStore(STORE_QUOTE_MAPPINGS, { keyPath: 'id' });
+        store.createIndex('quoteKey', 'quoteKey', { unique: false });
+        store.createIndex('vin', 'vin', { unique: false });
+        store.createIndex('partNumber', 'partNumber', { unique: false });
+        store.createIndex('repairerNormalised', 'repairerNormalised', { unique: false });
+        store.createIndex('modelCode', 'modelCode', { unique: false });
+        store.createIndex('model', 'model', { unique: false });
       }
     };
 
@@ -222,6 +235,30 @@ export const AsaCapsDatabase = {
   },
   async putBackupState(state: BackupState): Promise<void> {
     await withStore(STORE_BACKUP, 'readwrite', (store) => store.put({ key: 'backup', ...state }));
+  },
+
+  // Quote mappings (PartsCheck repairer description → ASA part number)
+  async listQuoteMappings(): Promise<QuoteMapping[]> {
+    return getAll<QuoteMapping>(STORE_QUOTE_MAPPINGS);
+  },
+  async listQuoteMappingsForQuote(quoteKey: string): Promise<QuoteMapping[]> {
+    const db = await openDatabase();
+    const tx = db.transaction(STORE_QUOTE_MAPPINGS, 'readonly');
+    const index = tx.objectStore(STORE_QUOTE_MAPPINGS).index('quoteKey');
+    return promisifyRequest(index.getAll(quoteKey));
+  },
+  /** Upserts by id (quote key + row number), so re-reading a quote never duplicates rows. */
+  async putQuoteMappings(mappings: QuoteMapping[]): Promise<void> {
+    if (mappings.length === 0) return;
+    const db = await openDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_QUOTE_MAPPINGS, 'readwrite');
+      const store = tx.objectStore(STORE_QUOTE_MAPPINGS);
+      for (const mapping of mappings) store.put(mapping);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
   },
 };
 

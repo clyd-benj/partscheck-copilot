@@ -1,8 +1,10 @@
 import { createRoot } from 'react-dom/client';
 import sidebarStyles from '@/styles/sidebar.css?inline';
 import { extractRfqData } from '@/services/extractors';
+import { requestSaveQuoteCapture } from '@/services/messaging';
 import { isRfqPage } from '@/services/rfqDetection';
 import { Sidebar } from '@/sidebar/Sidebar';
+import { createQuoteCaptureStore, startQuoteCaptureWatcher, type QuoteCaptureStore } from './quoteCaptureWatcher';
 
 const HOST_ID = 'parts-interpreter-toolkit-host';
 
@@ -12,7 +14,7 @@ const HOST_ID = 'parts-interpreter-toolkit-host';
  * Tailwind base reset can never bleed out and alter PartsCheck's own
  * styling. This is what makes the extension truly read-only/non-intrusive.
  */
-function injectSidebar(): void {
+function injectSidebar(captureStore: QuoteCaptureStore): void {
   if (document.getElementById(HOST_ID)) return;
 
   const host = document.createElement('div');
@@ -28,9 +30,11 @@ function injectSidebar(): void {
   const mountPoint = document.createElement('div');
   shadowRoot.appendChild(mountPoint);
 
-  createRoot(mountPoint).render(<Sidebar data={extractRfqData()} />);
+  createRoot(mountPoint).render(<Sidebar data={extractRfqData()} captureStore={captureStore} />);
 }
 
 if (isRfqPage()) {
-  injectSidebar();
+  const captureStore = createQuoteCaptureStore();
+  injectSidebar(captureStore);
+  startQuoteCaptureWatcher(captureStore, requestSaveQuoteCapture);
 }

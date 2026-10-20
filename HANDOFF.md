@@ -601,7 +601,7 @@ npm run build      # tsc -b && vite build -> dist/
 npm run dev        # Vite watch mode with HMR; load dist/ as unpacked, refresh on changes
 npm run lint       # eslint . --max-warnings 0
 npm run typecheck  # tsc -b only
-npm test           # vitest run — 8 files, 57 tests, all currently passing
+npm test           # vitest run — 12 files, 103 tests, all currently passing
 npm run test:watch
 npm run format     # prettier --write .
 ```
@@ -631,7 +631,7 @@ different environment; don't assume it will.
 
 ## 7. Known gaps / explicitly deferred work (not bugs — things not asked for yet)
 
-- **No cross-reference between the two halves.** The PartsCheck sidebar extracts a VIN; the
+- **No cross-reference between the two halves** *(being addressed — see §9)*. The PartsCheck sidebar extracts a VIN; the
   ASA CAPS catalogue is keyed by VIN. Nothing currently looks up "has this VIN been seen in
   ASA CAPS, and if so what parts were captured for it" from within the PartsCheck sidebar.
   This was explicitly named as a "phase 2" feature during the integration planning and
@@ -680,3 +680,76 @@ different environment; don't assume it will.
   decision, fix a non-obvious bug, or have the user override a previous decision, add it
   here in the same level of detail as the existing entries, don't just rely on commit
   messages (which the next agent may not read as carefully as this file).
+
+---
+
+## 9. Quote mappings — learning part numbers from PartsCheck quotes (phase 1 done)
+
+The "cross-reference" gap from §7 is being built as **learning from DMS Upload**: the user
+enters ASA CAPS part numbers into Pentana ERA *in the same order as the PartsCheck lines*,
+exports ERA's CSV (`12A-PARTS-QUOTE-RPT_Data.csv`, no header: quote no, initials, `MI`-prefixed
+part no, description, qty, list, buy, notes) and uploads it with PartsCheck's "DMS Upload".
+PartsCheck fills rows **by position**. The extension reads the filled rows and stores each
+(repairer description → part number) pair. Phase 2 (not built yet) uses them to suggest part
+numbers on new quotes.
+
+### 9.1 What a filled PartsCheck row looks like (confirmed from a real save)
+
+`tests/fixtures/partscheck/quote-filled.html` / `quote-empty.html` are the same real quote
+after/before DMS Upload, trimmed to the quote form + `#lineTable` and **anonymised** (customer,
+estimator, reference, claim, rego, VIN serial, sales reps, competitor dealer replaced; draftID
+→ 10000001). `era-quote-1050894R.csv` is the CSV that was uploaded. Keep any new fixtures
+anonymised the same way.
+
+- After upload the page is **server-rendered** with the values (they're in the `value`
+  attributes), i.e. DMS Upload reloads the page rather than filling inputs by script.
+- Description cell: before upload `<b>repairer text</b>`; after, `<b>ERA DESCRIPTION</b><br/><i>repairer text</i>`.
+  ERA's **commas are stripped and words glue together** ("FENDERFR LH", "KNUCKLELH").
+- Inputs per row: `input.partNr` (MI prefix already stripped), `input.qty` (pre-filled `1`
+  even before upload), `input.listprice`, `input.buyprice`. Note: sibling
+  `tr.notesRow[data-draft_item_id][data-iteration] input.notes`.
+- `NA` / "NOT APPLICABLE" at 0.01 = no genuine part. `MZ…` = accessory.
+- `tr.lineRowPriceMatch` (blue) and `tr.compRow` (competitor) rows have no `lineRow` class.
+- Quote identity: hidden `form[name=frmSubmit] input[name=draftID]` (PartsCheck's own id) —
+  used as the key instead of "Reference" (the repairer's job number, not unique across
+  repairers; user agreed). `input[name=supplierRefNr]` ("Quote Nr") = ERA quote number.
+  PartsCheck also has `Model Nr` (blank on the sample) and `Mth/Yr` fields.
+
+### 9.2 Code
+
+- `src/services/extractors/quoteRows.ts` — `extractQuoteRows()` / `extractQuoteContext()`.
+  Read-only; every missing selector logs `[Parts Interpreter Toolkit] selector not found: …`
+  once per page.
+- `src/services/quoteCapture/synonyms.ts` — the growing vocabulary (side compounds like
+  `L/H/F`, slashed shorthand like `B/BAR`, `W/ARCH`, token abbreviations). Add entries here.
+  `L/R` is deliberately **not** a side (repairers use it for "left and right"); bare `BAR` is
+  not mapped to BUMPER (Triton "sports bar").
+- `src/services/quoteCapture/normalise.ts` — `parseSide()` (LH/RH/BOTH/NONE from repairer
+  text), `normaliseDescription()` (side removed, word order kept), `parseEraSide()` (word
+  *ending* in LH/RH, because of the glued ERA text).
+- `src/services/quoteCapture/buildMappings.ts` — pure row → `QuoteMapping`; flags
+  `noGenuinePart`, `isAccessory`, and `sideConflict` (repairer says LH, ERA line says RH —
+  a likely ERA ordering slip, shown as a warning in the sidebar).
+- `src/services/quoteCapture/captureQuote.ts` — background side: model code from the ASA
+  CAPS `vehicles` record by VIN (blank if unknown; no VIN decoding), upsert.
+- `asa-caps-catalogue` DB **v3** adds store `quoteMappings` (keyPath `id` =
+  `${quoteKey}::${rowNo}`, `.iteration` suffix for non-primary rows; indexes quoteKey, vin,
+  partNumber, repairerNormalised, modelCode, model). It lives in the ASA CAPS DB (not the
+  customer DB) because suggestions join it with `vehicles`/`fitments` by VIN. NA rows are
+  stored with `noGenuinePart: true` and must never be suggested.
+- `src/content/quoteCaptureWatcher.ts` — MutationObserver + passive change/input listeners on
+  `#lineTable`, 750ms debounce, fingerprint so unchanged tables aren't re-saved; reaches the
+  DB only via the `SAVE_QUOTE_CAPTURE` message. `src/sidebar/sections/QuoteCaptureSection.tsx`
+  shows "Captured N mappings", the filled-vs-requested mismatch warning, and side conflicts.
+- Tests: `quote-rows`, `normalise`, `quote-mappings` (incl. fake-indexeddb upsert),
+  `quote-capture-watcher`. They use `// @vitest-environment jsdom` (jsdom is a devDependency
+  for this).
+
+### 9.3 Phase 2 notes (suggestions, not built yet)
+
+- Repairers write a side on parts that aren't sided (e.g. "L/H/F HUB BEARING" → ERA
+  "BEARINGFR WHEEL HUB", no side). Hard side matching should apply only when the stored
+  mapping's part is sided (ERA side or repairer side on a sided part); unsided parts can match
+  either side.
+- Rank exact VIN > same model code > same model; show evidence; copy buttons only — never
+  write into PartsCheck inputs.
