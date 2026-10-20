@@ -32,8 +32,11 @@ async function performBackup(): Promise<BackupResult> {
       return { ok: false, error: message };
     }
 
-    const rows = await buildCatalogueRows();
-    const csv = rowsToCsv(rows);
+    const [rows, mappings] = await Promise.all([
+      buildCatalogueRows(),
+      AsaCapsDatabase.listQuoteMappings(),
+    ]);
+    const csv = rowsToCsv(rows, mappings);
 
     const fileHandle = await state.folderHandle.getFileHandle(BACKUP_FILENAME, { create: true });
     const writable = await fileHandle.createWritable();
@@ -45,7 +48,7 @@ async function performBackup(): Promise<BackupResult> {
       lastBackupAt: new Date().toISOString(),
       lastError: undefined,
     });
-    console.log(LOG_PREFIX, `backup written: ${rows.length} row(s)`);
+    console.log(LOG_PREFIX, `backup written: ${rows.length} fitment(s), ${mappings.length} quote mapping(s)`);
     return { ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

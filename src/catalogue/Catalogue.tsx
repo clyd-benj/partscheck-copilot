@@ -10,6 +10,7 @@ import {
 } from '@/services/asacaps/catalogueExport';
 import { buildCoverageSummary, type CoverageSummary } from '@/services/asacaps/coverage';
 import type { BackupState } from '@/types/asacaps';
+import type { QuoteMapping } from '@/types/quoteMapping';
 
 function vehicleLabel(row: CatalogueRow): string {
   const parts = [row.make, row.model ?? row.modelCode, row.variant, row.year].filter(Boolean);
@@ -23,6 +24,7 @@ function matchesQuery(row: CatalogueRow, query: string): boolean {
     row.partNumber,
     row.pnc,
     row.description,
+    row.eraDescription,
     row.make,
     row.model,
     row.variant,
@@ -42,6 +44,7 @@ function matchesQuery(row: CatalogueRow, query: string): boolean {
 
 export function Catalogue() {
   const [allRows, setAllRows] = useState<CatalogueRow[]>([]);
+  const [quoteMappings, setQuoteMappings] = useState<QuoteMapping[]>([]);
   const [query, setQuery] = useState('');
   const [coverage, setCoverage] = useState<CoverageSummary | null>(null);
   const [backupState, setBackupState] = useState<BackupState>({ enabled: false });
@@ -49,12 +52,14 @@ export function Catalogue() {
   const [backupBusy, setBackupBusy] = useState(false);
 
   async function refresh() {
-    const [rows, summary, backup] = await Promise.all([
+    const [rows, summary, backup, mappings] = await Promise.all([
       buildCatalogueRows(),
       buildCoverageSummary(),
       AsaCapsDatabase.getBackupState(),
+      AsaCapsDatabase.listQuoteMappings(),
     ]);
     setAllRows(rows);
+    setQuoteMappings(mappings);
     setCoverage(summary);
     setBackupState(backup);
   }
@@ -88,7 +93,7 @@ export function Catalogue() {
       const text = await file.text();
       const result = await importCsv(text);
       setImportStatus({
-        message: `Imported ${result.vehiclesImported} vehicle${result.vehiclesImported === 1 ? '' : 's'} and ${result.fitmentsImported} part${result.fitmentsImported === 1 ? '' : 's'} from "${file.name}".`,
+        message: `Imported ${result.vehiclesImported} vehicle${result.vehiclesImported === 1 ? '' : 's'}, ${result.fitmentsImported} part${result.fitmentsImported === 1 ? '' : 's'} and ${result.quoteMappingsImported} quote mapping${result.quoteMappingsImported === 1 ? '' : 's'} from "${file.name}".`,
         kind: 'success',
       });
       await refresh();
@@ -139,7 +144,7 @@ export function Catalogue() {
       <header>
         <h1 className="text-xl font-semibold tracking-tight">Parts Interpreter Toolkit — ASA CAPS Catalogue</h1>
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
-          Every VIN → part number pairing captured while working in ASA CAPS.
+          Every VIN → part number pairing captured while working in ASA CAPS or from priced PartsCheck quotes.
         </p>
       </header>
 
@@ -210,7 +215,12 @@ export function Catalogue() {
                     <td className="px-2 py-1">{vehicleLabel(row)}</td>
                     <td className="px-2 py-1 font-mono">{row.partNumber}</td>
                     <td className="px-2 py-1 font-mono">{row.pnc ?? '—'}</td>
-                    <td className="px-2 py-1">{row.description ?? '—'}</td>
+                    <td className="px-2 py-1">
+                      {row.description ?? row.eraDescription ?? '—'}
+                      {row.sources.includes('partscheck-quote') && (
+                        <span className="ml-1 text-xs text-neutral-500 dark:text-neutral-400">(PartsCheck quote)</span>
+                      )}
+                    </td>
                     <td className="px-2 py-1">{row.timesCopied}</td>
                     <td className="px-2 py-1">{new Date(row.firstCapturedAt).toLocaleString()}</td>
                     <td className="px-2 py-1">{new Date(row.lastCapturedAt).toLocaleString()}</td>
@@ -229,7 +239,7 @@ export function Catalogue() {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={() => triggerDownload(`asa-caps-catalogue-${Date.now()}.csv`, rowsToCsv(allRows), 'text/csv')}
+            onClick={() => triggerDownload(`asa-caps-catalogue-${Date.now()}.csv`, rowsToCsv(allRows, quoteMappings), 'text/csv')}
             className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium transition hover:bg-surface-subtle dark:border-border-dark dark:hover:bg-surface-dark-subtle"
           >
             Export CSV
@@ -237,7 +247,7 @@ export function Catalogue() {
           <button
             type="button"
             onClick={() =>
-              triggerDownload(`asa-caps-catalogue-${Date.now()}.json`, rowsToJson(allRows), 'application/json')
+              triggerDownload(`asa-caps-catalogue-${Date.now()}.json`, rowsToJson(allRows, quoteMappings), 'application/json')
             }
             className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium transition hover:bg-surface-subtle dark:border-border-dark dark:hover:bg-surface-dark-subtle"
           >

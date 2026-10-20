@@ -601,7 +601,7 @@ npm run build      # tsc -b && vite build -> dist/
 npm run dev        # Vite watch mode with HMR; load dist/ as unpacked, refresh on changes
 npm run lint       # eslint . --max-warnings 0
 npm run typecheck  # tsc -b only
-npm test           # vitest run — 14 files, 123 tests, all currently passing
+npm test           # vitest run — 15 files, 138 tests, all currently passing
 npm run test:watch
 npm run format     # prettier --write .
 ```
@@ -775,3 +775,41 @@ anonymised the same way.
   pages served at a `partscheck.com.au` URL (capture of the filled quote, then suggestions on a
   new quote). That harness lives outside the repo; it's ~40 lines of `launchPersistentContext`
   with `--load-extension` + `context.route()`.
+
+### 9.4 The ASA CAPS catalogue as a second suggestion source, and quotes feeding it
+
+User request: the catalogue (vehicles + fitments) must be a suggestion source, not just a
+model-code lookup; captured quotes must add their parts to the catalogue; export/import must
+carry the quote mappings.
+
+- **Suggestions** (`suggestions.ts`) now rank `Candidate`s from two sources through one
+  pipeline (same wording/position/side/tier rules as §9.3):
+  1. `quotes` — quoteMappings (repairer wording).
+  2. `catalogue` — **only for lines source 1 has nothing for**: fitments that have an
+     ASA `description` (i.e. were copied in ASA CAPS), matched by
+     `normaliseDescription(ASA description)` vs the line; the part's hand is
+     `parseSide(ASA description)`; tier uses the fitment's vehicle record.
+  Each `PartSuggestion` has `source`; the sidebar labels it "from your quotes" /
+  "from ASA catalogue" and evidence reads "used on…" / "seen in ASA CAPS…".
+  ASA's names don't always match repairer wording ("GUARD LINER" vs "SHIELD,FR WHEELHOUSE
+  SPLASH") — grow `synonyms.ts` from real misses rather than guessing.
+- **Quotes → catalogue** (`buildQuoteFitments`, `vehicleFromQuote` in buildMappings.ts, called
+  from `captureQuote`): each non-NA, non-side-conflict row becomes a fitment
+  `${vin}::${partNumber}` (same key as ASA CAPS fitments → no duplicates) with
+  `sessionId: 'partscheck-quote'`, `timesCopied: 0`, the ERA text in **`eraDescription`**
+  (never `description`, which stays ASA-only — PartsCheck's comma-stripped ERA text would
+  pollute catalogue matching), and `sources` including `'partscheck-quote'`. A VIN not yet in
+  `vehicles` gets a basic record (make/model/series/year from PartsCheck); an existing ASA
+  vehicle record is never modified.
+- `PartFitment.sources?: FitmentSource[]` (`'asacaps' | 'partscheck-quote' | 'imported'`);
+  missing = legacy ASA CAPS fitment. `withFitmentSource()` in types/asacaps.ts.
+  `vehicle-session.ts` (ported ASA pipeline) now also records `'asacaps'` — the only change
+  to that file.
+- **Export/import** (`catalogueExport.ts`): the original 17 CSV columns are unchanged and
+  first; appended: `ERA Description`, `Sources` (`;`-separated), `Record Type`
+  (`fitment` | `quote-mapping`) and the quote-mapping fields. Quote-mapping rows reuse
+  VIN/Make/Model/Model Code/Part Number and put firstSeen/lastSeen in First/Last Captured.
+  Import dispatches on Record Type (files without it import as fitments, sources
+  `['imported']`), upserts mappings by id keeping the widest first/last seen, and now keeps a
+  `Times Copied` of 0. JSON export is now `{ fitments, quoteMappings }` (was a bare array;
+  there is no JSON import). The hourly auto-backup CSV includes the mappings too.

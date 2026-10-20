@@ -6,6 +6,7 @@ import {
   copyAllText,
   type LineSuggestions,
   type PartSuggestion,
+  type SuggestionSource,
 } from '@/services/quoteCapture/suggestions';
 import type { RequestedPart } from '@/types/rfq';
 
@@ -15,6 +16,11 @@ interface PartsChecklistProps {
 }
 
 const NO_SUGGESTIONS: LineSuggestions['suggestions'] = [];
+
+const SOURCE_LABEL: Record<SuggestionSource, string> = {
+  quotes: 'from your quotes',
+  catalogue: 'from ASA catalogue',
+};
 
 function SuggestionRow({ suggestion }: { suggestion: PartSuggestion }) {
   const { copied, copy } = useCopyToClipboard();
@@ -30,13 +36,23 @@ function SuggestionRow({ suggestion }: { suggestion: PartSuggestion }) {
         {copied ? 'Copied' : suggestion.partNumber}
       </button>
       <div className="min-w-0">
-        {suggestion.eraDescription && (
+        {suggestion.description && (
           <div className="truncate text-neutral-700 dark:text-neutral-300">
-            {suggestion.eraDescription}
+            {suggestion.description}
             {suggestion.isAccessory && <span className="text-neutral-500"> · accessory</span>}
           </div>
         )}
         <div className="text-neutral-500 dark:text-neutral-400">
+          <span
+            className={
+              suggestion.source === 'quotes'
+                ? 'font-medium text-accent'
+                : 'font-medium text-neutral-700 dark:text-neutral-300'
+            }
+          >
+            {SOURCE_LABEL[suggestion.source]}
+          </span>
+          {' · '}
           {/* Non-breaking hyphens so dates don't wrap mid-way. */}
           {suggestion.evidence.replace(/-/g, '\u2011')}
         </div>

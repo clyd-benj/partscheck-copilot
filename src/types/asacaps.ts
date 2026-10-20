@@ -39,14 +39,25 @@ export interface VehicleSession {
   status: SessionStatus;
 }
 
+/**
+ * Where a fitment was learned: copied in ASA CAPS, captured from a priced
+ * PartsCheck quote, or restored from a CSV import. Fitments saved before
+ * this field existed have no `sources` and came from ASA CAPS.
+ */
+export type FitmentSource = 'asacaps' | 'partscheck-quote' | 'imported';
+
 export interface PartFitment {
   id: string; // `${vin}::${partNumber}`
   vin: string;
   sessionId: string;
   partNumber: string;
+  /** ASA CAPS description. Only ever set from ASA CAPS (or an import of one). */
   description?: string;
+  /** ERA description from a PartsCheck quote (commas stripped by PartsCheck). */
+  eraDescription?: string;
+  sources?: FitmentSource[];
   pnc?: string; // parts diagram position code, e.g. "62070F" — distinct from partNumber
-  timesCopied: number;
+  timesCopied: number; // copies in ASA CAPS; 0 for a part only seen on PartsCheck quotes
   firstCapturedAt: string;
   lastCapturedAt: string;
 }
@@ -99,4 +110,13 @@ export interface BackupState {
   folderName?: string; // for display only, since the handle itself isn't human-readable
   lastBackupAt?: string;
   lastError?: string;
+}
+
+/** Adds a source to a fitment's list (legacy fitments without one came from ASA CAPS). */
+export function withFitmentSource(
+  sources: FitmentSource[] | undefined,
+  source: FitmentSource,
+): FitmentSource[] {
+  const current = sources ?? ['asacaps'];
+  return current.includes(source) ? current : [...current, source];
 }

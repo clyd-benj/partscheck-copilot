@@ -1,23 +1,32 @@
 import { normaliseDescription, parseEraSide, parseSide } from './normalise';
 import { POSITION_TOKENS } from './synonyms';
+import type { PartFitment, Vehicle } from '@/types/asacaps';
 import type { QuoteMapping, Side } from '@/types/quoteMapping';
 
 /**
- * Suggests ASA CAPS part numbers for the lines of a new PartsCheck quote
- * from previously captured quoteMappings. Pure: the caller supplies the
- * mappings (background worker, from IndexedDB).
+ * Suggests ASA CAPS part numbers for the lines of a new PartsCheck quote.
+ * Pure: the caller supplies the data (background worker, from IndexedDB).
  *
- * A stored mapping is a candidate for a line when
- *  - its repairer wording matches (identical normalised words, or close
- *    enough — see SIMILAR_THRESHOLD — with the same position words),
- *  - the side fits (see sideFits), and
- *  - it was used on the same vehicle, model code, VIN pattern or model.
+ * Two sources, in order:
+ *  1. "from your quotes" — captured quoteMappings whose repairer wording
+ *     matches the line.
+ *  2. "from ASA catalogue" — only for lines source 1 has nothing for:
+ *     fitments copied in ASA CAPS whose ASA description matches the line's
+ *     wording through the same synonym map.
+ *
+ * Either way a candidate must
+ *  - match the wording (identical normalised words, or close enough — see
+ *    SIMILAR_THRESHOLD — with the same position words),
+ *  - fit the side (see sideFits), and
+ *  - come from the same vehicle, model code, VIN pattern or model.
  * NA rows and rows flagged as an ERA ordering slip are never suggested.
  */
 
 /** Ranking tiers, best first. */
 export type MatchTier = 'vin' | 'modelCode' | 'vinPattern' | 'model';
 const TIER_ORDER: readonly MatchTier[] = ['vin', 'modelCode', 'vinPattern', 'model'];
+
+export type SuggestionSource = 'quotes' | 'catalogue';
 
 /** Minimum word-set overlap (Jaccard) for a "similar wording" match. */
 const SIMILAR_THRESHOLD = 0.75;
@@ -38,15 +47,17 @@ export interface SuggestionLine {
 
 export interface PartSuggestion {
   partNumber: string;
-  eraDescription?: string;
+  source: SuggestionSource;
+  /** ERA description (quotes) or ASA description (catalogue). */
+  description?: string;
   tier: MatchTier;
-  /** 1 = same words as a previous request; lower = similar wording. */
+  /** 1 = same words; lower = similar wording. */
   wordingScore: number;
-  /** Earlier repairer wording this part answered, when not identical to this line. */
+  /** Earlier repairer wording this part answered, when not identical to this line (quotes only). */
   similarWording?: string;
   /** Distinct vehicles (by VIN, else quote) in the winning tier. */
   vehicleCount: number;
-  /** Times this part answered matching wording, across all tiers. */
+  /** Matching records across all tiers. */
   timesUsed: number;
   lastSeen: string;
   isAccessory: boolean;
@@ -60,10 +71,36 @@ export interface LineSuggestions {
   suggestions: PartSuggestion[];
 }
 
+/** The ASA CAPS catalogue, as a fallback source. */
+export interface CatalogueData {
+  fitments: PartFitment[];
+  vehicles: Vehicle[];
+}
+
 interface SuggestOptions {
   /** Mappings from this quote are ignored (a reopened quote shouldn't suggest itself). */
   excludeQuoteKey?: string;
   limit?: number;
+  catalogue?: CatalogueData;
+}
+
+/** A stored record that could answer a line, from either source. */
+interface Candidate {
+  source: SuggestionSource;
+  partNumber: string;
+  words: Set<string>;
+  /** Hand of the part itself: LH/RH, or NONE when it fits either side. */
+  partSide: Side;
+  vin?: string;
+  modelCode?: string;
+  model?: string;
+  /** What counts as one vehicle when counting evidence. */
+  vehicleKey: string;
+  /** The wording that matched (repairer text for quotes). */
+  wording: string;
+  description?: string;
+  lastSeen: string;
+  isAccessory: boolean;
 }
 
 function wordSet(normalised: string): Set<string> {
@@ -83,24 +120,15 @@ function wordingScore(a: Set<string>, b: Set<string>): number {
   return shared / (a.size + b.size - shared);
 }
 
-/** LH/RH when the part itself is handed; NONE when it fits either side. */
-function partSide(mapping: QuoteMapping): Side {
-  // The ERA description is the authority on whether the part is handed:
-  // repairers write "L/H/F HUB BEARING" for a part ERA lists as unsided.
-  if (mapping.eraDescription) return parseEraSide(mapping.eraDescription);
-  return mapping.side;
-}
-
 /**
  * Handed parts must match the line's side; a line that names both sides
  * accepts either hand. Unhanded parts fit any line. A handed part is never
  * suggested for a line with no side, since the wrong hand is a wrong part.
  */
-function sideFits(lineSide: Side, mapping: QuoteMapping): boolean {
-  const side = partSide(mapping);
-  if (side === 'NONE') return true;
-  if (side === 'BOTH') return lineSide === 'BOTH';
-  return lineSide === side || lineSide === 'BOTH';
+function sideFits(lineSide: Side, partSide: Side): boolean {
+  if (partSide === 'NONE') return true;
+  if (partSide === 'BOTH') return lineSide === 'BOTH';
+  return lineSide === partSide || lineSide === 'BOTH';
 }
 
 function sameText(a: string | undefined, b: string | undefined): boolean {
@@ -112,13 +140,58 @@ function vinPattern(vin: string | undefined): string | undefined {
   return vin && vin.length === 17 ? vin.slice(0, 8).toUpperCase() : undefined;
 }
 
-function tierFor(vehicle: SuggestionVehicle, mapping: QuoteMapping): MatchTier | null {
-  if (sameText(vehicle.vin, mapping.vin)) return 'vin';
-  if (sameText(vehicle.modelCode, mapping.modelCode)) return 'modelCode';
+function tierFor(vehicle: SuggestionVehicle, candidate: Candidate): MatchTier | null {
+  if (sameText(vehicle.vin, candidate.vin)) return 'vin';
+  if (sameText(vehicle.modelCode, candidate.modelCode)) return 'modelCode';
   const pattern = vinPattern(vehicle.vin);
-  if (pattern && pattern === vinPattern(mapping.vin)) return 'vinPattern';
-  if (sameText(vehicle.model, mapping.model)) return 'model';
+  if (pattern && pattern === vinPattern(candidate.vin)) return 'vinPattern';
+  if (sameText(vehicle.model, candidate.model)) return 'model';
   return null;
+}
+
+function quoteCandidates(mappings: QuoteMapping[], excludeQuoteKey?: string): Candidate[] {
+  return mappings
+    .filter((m) => !m.noGenuinePart && !m.sideConflict && m.quoteKey !== excludeQuoteKey)
+    .map((m): Candidate => ({
+      source: 'quotes',
+      partNumber: m.partNumber,
+      words: wordSet(m.repairerNormalised),
+      // The ERA description is the authority on whether the part is handed:
+      // repairers write "L/H/F HUB BEARING" for a part ERA lists as unsided.
+      partSide: m.eraDescription ? parseEraSide(m.eraDescription) : m.side,
+      vin: m.vin,
+      modelCode: m.modelCode,
+      model: m.model,
+      vehicleKey: m.vin ?? m.quoteKey,
+      wording: m.repairerDescription,
+      description: m.eraDescription,
+      lastSeen: m.lastSeen,
+      isAccessory: m.isAccessory,
+    }));
+}
+
+/** Fitments with an ASA description (copied in ASA CAPS); quote-only fitments have none. */
+function catalogueCandidates({ fitments, vehicles }: CatalogueData): Candidate[] {
+  const vehicleByVin = new Map(vehicles.map((v) => [v.vin, v]));
+  return fitments
+    .filter((f) => f.description && f.partNumber !== 'NA')
+    .map((f): Candidate => {
+      const vehicle = vehicleByVin.get(f.vin);
+      return {
+        source: 'catalogue',
+        partNumber: f.partNumber,
+        words: wordSet(normaliseDescription(f.description!)),
+        partSide: parseSide(f.description!),
+        vin: f.vin,
+        modelCode: vehicle?.modelCode,
+        model: vehicle?.model,
+        vehicleKey: f.vin,
+        wording: f.description!,
+        description: f.description,
+        lastSeen: f.lastCapturedAt,
+        isAccessory: f.partNumber.startsWith('MZ'),
+      };
+    });
 }
 
 function day(iso: string): string {
@@ -130,24 +203,88 @@ function plural(n: number, word: string): string {
 }
 
 function describeEvidence(
+  source: SuggestionSource,
   tier: MatchTier,
   vehicleCount: number,
   timesUsed: number,
   lastSeen: string,
-  winning: QuoteMapping[],
+  winning: Candidate[],
 ): string {
+  const verb = source === 'quotes' ? 'used' : 'seen in ASA CAPS';
   const last = `last ${day(lastSeen)}`;
-  const model = winning.find((m) => m.model)?.model ?? '';
+  const model = winning.find((c) => c.model)?.model ?? '';
   switch (tier) {
     case 'vin':
-      return `used on this vehicle (${plural(timesUsed, 'time')}), ${last}`;
+      return source === 'quotes'
+        ? `used on this vehicle (${plural(timesUsed, 'time')}), ${last}`
+        : `seen in ASA CAPS for this vehicle, ${last}`;
     case 'modelCode':
-      return `used on ${plural(vehicleCount, 'vehicle')} · ${winning[0].modelCode} ${model}, ${last}`.trim();
+      return `${verb} on ${plural(vehicleCount, 'vehicle')} · ${`${winning[0].modelCode} ${model}`.trim()}, ${last}`;
     case 'vinPattern':
-      return `used on ${plural(vehicleCount, 'vehicle')} with this VIN pattern · ${model}, ${last}`;
+      return `${verb} on ${plural(vehicleCount, 'vehicle')} with this VIN pattern · ${model}, ${last}`;
     case 'model':
-      return `used on ${plural(vehicleCount, 'vehicle')} · ${model}, ${last}`;
+      return `${verb} on ${plural(vehicleCount, 'vehicle')} · ${model}, ${last}`;
   }
+}
+
+function rank(
+  vehicle: SuggestionVehicle,
+  lineWords: Set<string>,
+  lineSide: Side,
+  candidates: Candidate[],
+  candidateWords: Set<string>[],
+): PartSuggestion[] {
+  const byPart = new Map<string, { candidate: Candidate; tier: MatchTier; score: number }[]>();
+  candidates.forEach((candidate, i) => {
+    const score = wordingScore(lineWords, candidateWords[i]);
+    if (score < SIMILAR_THRESHOLD) return;
+    if (!sideFits(lineSide, candidate.partSide)) return;
+    const tier = tierFor(vehicle, candidate);
+    if (!tier) return;
+    const hits = byPart.get(candidate.partNumber) ?? [];
+    hits.push({ candidate, tier, score });
+    byPart.set(candidate.partNumber, hits);
+  });
+
+  const suggestions: PartSuggestion[] = Array.from(byPart, ([partNumber, hits]) => {
+    const tier = TIER_ORDER.find((t) => hits.some((hit) => hit.tier === t))!;
+    const winning = hits.filter((hit) => hit.tier === tier).map((hit) => hit.candidate);
+    const vehicleCount = new Set(winning.map((c) => c.vehicleKey)).size;
+    const best = hits.reduce((a, b) => (b.score > a.score ? b : a));
+    const latest = hits.reduce((a, b) =>
+      b.candidate.lastSeen > a.candidate.lastSeen ? b : a,
+    ).candidate;
+    return {
+      partNumber,
+      source: latest.source,
+      description: latest.description,
+      tier,
+      wordingScore: best.score,
+      similarWording:
+        best.score < 1 && latest.source === 'quotes' ? best.candidate.wording : undefined,
+      vehicleCount,
+      timesUsed: hits.length,
+      lastSeen: latest.lastSeen,
+      isAccessory: latest.isAccessory,
+      evidence: describeEvidence(
+        latest.source,
+        tier,
+        vehicleCount,
+        hits.length,
+        latest.lastSeen,
+        winning,
+      ),
+    };
+  });
+
+  return suggestions.sort(
+    (a, b) =>
+      TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier) ||
+      b.wordingScore - a.wordingScore ||
+      b.vehicleCount - a.vehicleCount ||
+      b.timesUsed - a.timesUsed ||
+      b.lastSeen.localeCompare(a.lastSeen),
+  );
 }
 
 export function suggestForLines(
@@ -156,58 +293,19 @@ export function suggestForLines(
   mappings: QuoteMapping[],
   options: SuggestOptions = {},
 ): LineSuggestions[] {
-  const usable = mappings.filter(
-    (m) => !m.noGenuinePart && !m.sideConflict && m.quoteKey !== options.excludeQuoteKey,
-  );
-  const usableWords = usable.map((m) => wordSet(m.repairerNormalised));
+  const fromQuotes = quoteCandidates(mappings, options.excludeQuoteKey);
+  const fromQuotesWords = fromQuotes.map((c) => c.words);
+  const fromCatalogue = options.catalogue ? catalogueCandidates(options.catalogue) : [];
+  const fromCatalogueWords = fromCatalogue.map((c) => c.words);
 
   return lines.map((line) => {
     const side = parseSide(line.description);
-    const normalised = normaliseDescription(line.description);
-    const lineWords = wordSet(normalised);
+    const lineWords = wordSet(normaliseDescription(line.description));
 
-    const byPart = new Map<string, { mapping: QuoteMapping; tier: MatchTier; score: number }[]>();
-    usable.forEach((mapping, i) => {
-      const score = wordingScore(lineWords, usableWords[i]);
-      if (score < SIMILAR_THRESHOLD) return;
-      if (!sideFits(side, mapping)) return;
-      const tier = tierFor(vehicle, mapping);
-      if (!tier) return;
-      const hits = byPart.get(mapping.partNumber) ?? [];
-      hits.push({ mapping, tier, score });
-      byPart.set(mapping.partNumber, hits);
-    });
-
-    const suggestions: PartSuggestion[] = Array.from(byPart, ([partNumber, hits]) => {
-      const tier = TIER_ORDER.find((t) => hits.some((hit) => hit.tier === t))!;
-      const winning = hits.filter((hit) => hit.tier === tier).map((hit) => hit.mapping);
-      const vehicleCount = new Set(winning.map((m) => m.vin ?? m.quoteKey)).size;
-      const best = hits.reduce((a, b) => (b.score > a.score ? b : a));
-      const latest = hits.reduce((a, b) =>
-        b.mapping.lastSeen > a.mapping.lastSeen ? b : a,
-      ).mapping;
-      return {
-        partNumber,
-        eraDescription: latest.eraDescription,
-        tier,
-        wordingScore: best.score,
-        similarWording: best.score < 1 ? best.mapping.repairerDescription : undefined,
-        vehicleCount,
-        timesUsed: hits.length,
-        lastSeen: latest.lastSeen,
-        isAccessory: latest.isAccessory,
-        evidence: describeEvidence(tier, vehicleCount, hits.length, latest.lastSeen, winning),
-      };
-    });
-
-    suggestions.sort(
-      (a, b) =>
-        TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier) ||
-        b.wordingScore - a.wordingScore ||
-        b.vehicleCount - a.vehicleCount ||
-        b.timesUsed - a.timesUsed ||
-        b.lastSeen.localeCompare(a.lastSeen),
-    );
+    let suggestions = rank(vehicle, lineWords, side, fromQuotes, fromQuotesWords);
+    if (suggestions.length === 0) {
+      suggestions = rank(vehicle, lineWords, side, fromCatalogue, fromCatalogueWords);
+    }
 
     return {
       id: line.id,

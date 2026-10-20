@@ -1,4 +1,5 @@
 import { normaliseDescription, parseEraSide, parseSide } from './normalise';
+import { withFitmentSource, type PartFitment, type Vehicle } from '@/types/asacaps';
 import type {
   QuoteCaptureResult,
   QuoteContext,
@@ -96,5 +97,64 @@ export function summariseCapture(
     sideConflicts: mappings.filter((m) => m.sideConflict),
     requestedLines: rows.filter((row) => row.iteration === 0).length,
     filledRows: rows.filter((row) => row.iteration === 0 && row.partNumber !== '').length,
+  };
+}
+
+/**
+ * Catalogue fitments for a captured quote's part numbers, keyed like ASA
+ * CAPS fitments (`${vin}::${partNumber}`) so a part seen both ways is one
+ * record. NA rows, rows that look like an ERA ordering slip and rows
+ * without a VIN are skipped. The ASA description is never overwritten
+ * (the ERA one goes in its own field) and timesCopied stays an ASA CAPS
+ * copy count.
+ */
+export function buildQuoteFitments(
+  mappings: QuoteMapping[],
+  existing: ReadonlyMap<string, PartFitment>,
+  now: string,
+): PartFitment[] {
+  const byId = new Map<string, PartFitment>();
+  for (const mapping of mappings) {
+    if (mapping.noGenuinePart || mapping.sideConflict || !mapping.vin) continue;
+    const id = `${mapping.vin}::${mapping.partNumber}`;
+    const previous = byId.get(id) ?? existing.get(id);
+    byId.set(
+      id,
+      previous
+        ? {
+            ...previous,
+            eraDescription: previous.eraDescription ?? mapping.eraDescription,
+            sources: withFitmentSource(previous.sources, 'partscheck-quote'),
+            lastCapturedAt: previous.lastCapturedAt > now ? previous.lastCapturedAt : now,
+          }
+        : {
+            id,
+            vin: mapping.vin,
+            sessionId: 'partscheck-quote',
+            partNumber: mapping.partNumber,
+            eraDescription: mapping.eraDescription,
+            sources: ['partscheck-quote'],
+            timesCopied: 0,
+            firstCapturedAt: mapping.firstSeen,
+            lastCapturedAt: now,
+          },
+    );
+  }
+  return Array.from(byId.values());
+}
+
+/** A minimal catalogue vehicle for a quote VIN not yet seen in ASA CAPS. */
+export function vehicleFromQuote(context: QuoteContext, now: string): Vehicle | undefined {
+  if (!context.vin) return undefined;
+  return {
+    id: context.vin,
+    vin: context.vin,
+    make: context.make,
+    model: context.model,
+    variant: context.series,
+    year: context.mthYr?.match(/(\d{4})$/)?.[1],
+    rawText: '',
+    firstSeen: now,
+    lastSeen: now,
   };
 }

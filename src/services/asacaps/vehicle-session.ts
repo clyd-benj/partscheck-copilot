@@ -6,6 +6,7 @@
 import { AsaCapsDatabase } from '@/storage/asacapsDb';
 import { classifyClipboardText } from './clipboard-parser';
 import { extractVehicleFields } from './vehicle-extract';
+import { withFitmentSource } from '@/types/asacaps';
 import type {
   ClipboardClassification,
   PartFitment,
@@ -75,6 +76,7 @@ async function savePartToActiveVehicle(
         ...existing,
         description: existing.description ?? part.description,
         pnc: existing.pnc ?? part.pnc,
+        sources: withFitmentSource(existing.sources, 'asacaps'),
         timesCopied: existing.timesCopied + 1,
         lastCapturedAt: now,
       }
@@ -85,6 +87,7 @@ async function savePartToActiveVehicle(
         partNumber: part.partNumber,
         description: part.description,
         pnc: part.pnc,
+        sources: ['asacaps'],
         timesCopied: 1,
         firstCapturedAt: now,
         lastCapturedAt: now,
