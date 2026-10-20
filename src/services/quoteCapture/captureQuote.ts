@@ -1,3 +1,4 @@
+import { vehicleBuildMonth } from './buildDate';
 import {
   buildQuoteFitments,
   buildQuoteMappings,
@@ -17,7 +18,8 @@ import type { QuoteCaptureResult, QuoteContext, QuoteRow } from '@/types/quoteMa
 /**
  * Background-side half of the PartsCheck quote capture: enriches the
  * DMS-uploaded (verified) rows read by the content script with the model
- * code from the ASA CAPS catalogue (by VIN), upserts them into
+ * code and build month from the ASA CAPS catalogue (by VIN; build month
+ * falls back to PartsCheck Mth/Yr), upserts them into
  * `quoteMappings`, and adds them to the catalogue as fitments for the VIN.
  * Rows the repairer filled in themselves only go to `repairerSupplied`.
  * Must only run in an extension-origin context (see src/storage/asacapsDb.ts).
@@ -32,6 +34,7 @@ export async function captureQuote(
 
   const mappings = buildQuoteMappings(context, rows, {
     modelCode: vehicle?.modelCode,
+    buildMonth: vehicleBuildMonth(vehicle, context.mthYr),
     now,
     existing: new Map(existing.map((mapping) => [mapping.id, mapping])),
   });

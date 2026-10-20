@@ -1,3 +1,5 @@
+import type { BuildMonthSource } from '@/services/quoteCapture/buildDate';
+
 // Learned "repairer description → ASA CAPS part number" pairs, captured from
 // PartsCheck quote rows after DMS Upload has filled them (one ERA CSV line
 // per PartsCheck line, by position).
@@ -90,6 +92,10 @@ export interface QuoteMapping {
   mthYr?: string;
   /** From the ASA CAPS catalogue's vehicle record for this VIN, if known. */
   modelCode?: string;
+  /** Vehicle build month (year * 12 + month), see services/quoteCapture/buildDate.ts. */
+  buildMonth?: number;
+  /** Where buildMonth came from: ASA CAPS productionFrom, or PartsCheck Mth/Yr. */
+  buildMonthSource?: BuildMonthSource;
 
   firstSeen: string;
   lastSeen: string;

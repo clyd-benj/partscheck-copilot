@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   buildYear,
+  formatBuildMonth,
   parseAsaProductionDate,
+  parseBuildMonthText,
   parsePartsCheckMthYr,
   vehicleBuildMonth,
 } from "@/services/quoteCapture/buildDate";
@@ -69,5 +71,16 @@ describe("buildYear", () => {
   it("keeps December in its own year", () => {
     expect(buildYear(2010 * 12 + 12)).toBe(2010);
     expect(buildYear(2022 * 12 + 1)).toBe(2022);
+  });
+});
+
+describe("formatBuildMonth / parseBuildMonthText", () => {
+  it("round-trips through the CSV form", () => {
+    expect(formatBuildMonth(2022 * 12 + 6)).toBe("2022-06");
+    expect(formatBuildMonth(2010 * 12 + 12)).toBe("2010-12");
+    expect(parseBuildMonthText("2022-06")).toBe(2022 * 12 + 6);
+    expect(parseBuildMonthText("2010-12")).toBe(2010 * 12 + 12);
+    expect(parseBuildMonthText("")).toBeUndefined();
+    expect(parseBuildMonthText("2022-13")).toBeUndefined();
   });
 });

@@ -131,6 +131,39 @@ describe("captureQuote (quoteMappings store)", () => {
     expect(stored.every((m) => m.modelCode === "QF1W")).toBe(true);
   });
 
+  it("stores the build month from PartsCheck Mth/Yr when the VIN isn't in the catalogue", async () => {
+    const { context, rows } = filledQuote();
+    await captureQuote(context, rows, NOW);
+    const stored = await AsaCapsDatabase.listQuoteMappings();
+    expect(stored.every((m) => m.buildMonth === 2022 * 12 + 12 && m.buildMonthSource === "partscheck")).toBe(
+      true,
+    );
+  });
+
+  it("prefers the ASA CAPS production date for the build month", async () => {
+    await AsaCapsDatabase.putVehicle({
+      id: "MMAGUKS10NH000001",
+      vin: "MMAGUKS10NH000001",
+      productionFrom: "2022.11.20",
+      rawText: "",
+      firstSeen: NOW,
+      lastSeen: NOW,
+    });
+    const { context, rows } = filledQuote();
+    await captureQuote(context, rows, NOW);
+    const stored = await AsaCapsDatabase.listQuoteMappings();
+    expect(stored.every((m) => m.buildMonth === 2022 * 12 + 11 && m.buildMonthSource === "asacaps")).toBe(
+      true,
+    );
+  });
+
+  it("leaves the build month blank when there's no usable date", async () => {
+    const { context, rows } = filledQuote();
+    await captureQuote({ ...context, mthYr: "unknown" }, rows, NOW);
+    const stored = await AsaCapsDatabase.listQuoteMappings();
+    expect(stored.every((m) => m.buildMonth === undefined && m.buildMonthSource === undefined)).toBe(true);
+  });
+
   it("leaves the model code blank when the VIN isn't in the catalogue", async () => {
     const { context, rows } = filledQuote();
     await captureQuote(context, rows, NOW);

@@ -1,3 +1,4 @@
+import type { BuildMonth } from './buildDate';
 import { normaliseDescription, parseEraSide, parseSide } from './normalise';
 import { withFitmentSource, type PartFitment, type Vehicle } from '@/types/asacaps';
 import { looksLikePartNumber } from '@/services/asacaps/part-parser';
@@ -30,6 +31,8 @@ export function quoteMappingId(
 interface BuildOptions {
   /** Model code from the ASA CAPS catalogue's record for this VIN, if any. */
   modelCode?: string;
+  /** The vehicle's build month (ASA CAPS production date, else PartsCheck Mth/Yr). */
+  buildMonth?: BuildMonth;
   now: string;
   /** Previously stored mappings for this quote, by id — keeps their firstSeen. */
   existing?: ReadonlyMap<string, QuoteMapping>;
@@ -91,6 +94,8 @@ export function buildQuoteMappings(
       registration: context.registration,
       mthYr: context.mthYr,
       modelCode: options.modelCode,
+      buildMonth: options.buildMonth?.month,
+      buildMonthSource: options.buildMonth?.source,
       firstSeen: options.existing?.get(id)?.firstSeen ?? options.now,
       lastSeen: options.now,
     };

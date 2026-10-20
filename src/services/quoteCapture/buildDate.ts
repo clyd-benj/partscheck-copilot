@@ -58,3 +58,17 @@ export function vehicleBuildMonth(
 export function buildYear(buildMonth: number): number {
   return Math.floor((buildMonth - 1) / 12);
 }
+
+/** "2022-06" — how build months are written to CSV. */
+export function formatBuildMonth(buildMonth: number): string {
+  const year = buildYear(buildMonth);
+  const month = buildMonth - year * 12;
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
+
+/** Reads a build month written by formatBuildMonth. */
+export function parseBuildMonthText(value: string | undefined): number | undefined {
+  const match = value?.trim().match(/^(\d{4})-(\d{1,2})$/);
+  if (!match) return undefined;
+  return toBuildMonth(Number(match[1]), Number(match[2]));
+}

@@ -1,4 +1,5 @@
 import { AsaCapsDatabase } from '@/storage/asacapsDb';
+import { formatBuildMonth, parseBuildMonthText } from '@/services/quoteCapture/buildDate';
 import { normaliseDescription, parseSide } from '@/services/quoteCapture/normalise';
 import { withFitmentSource, type FitmentSource, type PartFitment, type Vehicle } from '@/types/asacaps';
 import type { QuoteMapping, Side } from '@/types/quoteMapping';
@@ -118,6 +119,8 @@ const MAPPING_HEADERS = [
   'Model Nr',
   'Registration',
   'Mth/Yr',
+  'Build Month',
+  'Build Month Source',
 ];
 
 const RECORD_FITMENT = 'fitment';
@@ -192,6 +195,8 @@ function mappingCells(m: QuoteMapping): unknown[] {
     m.modelNr,
     m.registration,
     m.mthYr,
+    m.buildMonth === undefined ? undefined : formatBuildMonth(m.buildMonth),
+    m.buildMonthSource,
   ];
 }
 
@@ -353,6 +358,8 @@ export async function importCsv(text: string): Promise<ImportResult> {
     modelNr: colIndex('model nr'),
     registration: colIndex('registration'),
     mthYr: colIndex('mth/yr'),
+    buildMonth: colIndex('build month'),
+    buildMonthSource: colIndex('build month source'),
   };
 
   if (col.vin === -1 || col.partNumber === -1) {
@@ -448,6 +455,16 @@ export async function importCsv(text: string): Promise<ImportResult> {
 
   return { vehiclesImported: touchedVins.size, fitmentsImported, quoteMappingsImported };
 
+  function importedBuildMonth(row: string[]): Pick<QuoteMapping, 'buildMonth' | 'buildMonthSource'> {
+    const buildMonth = parseBuildMonthText(cell(row, col.buildMonth));
+    const source = cell(row, col.buildMonthSource);
+    if (buildMonth === undefined) return {};
+    return {
+      buildMonth,
+      buildMonthSource: source === 'asacaps' || source === 'partscheck' ? source : undefined,
+    };
+  }
+
   /** Upserts one quote-mapping row by id; keeps the widest first/last seen range. */
   async function importQuoteMappingRow(row: string[]): Promise<boolean> {
     const quoteKey = cell(row, col.quoteKey);
@@ -495,6 +512,7 @@ export async function importCsv(text: string): Promise<ImportResult> {
         registration: cell(row, col.registration),
         mthYr: cell(row, col.mthYr),
         modelCode: cell(row, col.modelCode),
+        ...importedBuildMonth(row),
         firstSeen: existing && existing.firstSeen < firstSeen ? existing.firstSeen : firstSeen,
         lastSeen: existing && existing.lastSeen > lastSeen ? existing.lastSeen : lastSeen,
       },
