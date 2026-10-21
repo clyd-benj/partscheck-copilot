@@ -601,7 +601,7 @@ npm run build      # tsc -b && vite build -> dist/
 npm run dev        # Vite watch mode with HMR; load dist/ as unpacked, refresh on changes
 npm run lint       # eslint . --max-warnings 0
 npm run typecheck  # tsc -b only
-npm test           # vitest run — 19 files, 244 tests, all currently passing
+npm test           # vitest run — 21 files, 283 tests, all currently passing
 npm run test:watch
 npm run format     # prettier --write .
 ```
@@ -970,3 +970,52 @@ and a 0.75 Jaccard match let it through).
   and RH FRONT, 2010+2013 KK1T confirms 2011, VIN-pattern inference, linked wordings, side,
   conflicts, catalogue, the real fixture), `normalise.test.ts` (parsing), and the ranking files
   updated (`build-date-ranking`, `classification-ranking`, `catalogue-link`).
+
+### 9.9 Part side from every source; part-number parity (fixes 7400A539 on an R/H/R line)
+
+Real-use bug: "R/H/R Wheel Arch Mould" was offered 7400A539, ERA "MOULDINGRR WHEEL
+ARCHLHBLAC" (= MOULDING,RR WHEEL ARCH,LH,BLAC… — PartsCheck stripped the commas, and the
+colour after the side meant no word *ended* in LH). The old `parseEraSide` read "no side", so
+the part was treated as fitting either side. Same request re-stated §9.8 (parsing and
+confidence levels were already built — `859add8`, `d603b0e`); only this part was new.
+
+`src/services/quoteCapture/partSide.ts` — `resolvePartSides(evidenceByPart)`, built in
+`suggestForLines` from all usable quote mappings and ASA fitments of each part number:
+- Sources: (a) ERA descriptions (`readEraSide`: `clean` = a word ending in LH/RH,
+  `inner` = LH/RH glued inside a word, `maybeTruncated` = sideless and ≥ 26 chars),
+  (b) sides of the repairer lines the part answered, (c) ASA descriptions, (d) parity.
+- Rules: any clean ERA or ASA side, or a repairer line side, makes the part handed (a part
+  only ever captured on L/H lines is LH — this deliberately removes cross-side suggestions
+  for e.g. the hub bearing until ASA lists it without a side or it answers an R/H line too).
+  NONE only when no source names a side; an ASA description without a side, or answering
+  both LH and RH lines, settles NONE. LH vs RH anywhere (ERA vs ASA, ERA vs line, glued vs
+  line) = CONFLICT → never suggested. A glued `inner` side counts only if a line side or
+  parity agrees, else UNKNOWN → never offered for a handed line. `FALSE_SIDE_WORDS`
+  (WHEELHOUSE, WHEELHUB, OVERHAUL) are stripped before the glued search.
+- Parity (`parityHand`): ####A###, ####AA##, optional 1–2 letter colour suffix, MN/MR###### —
+  odd last digit LH, even RH; never 10-char "…P" numbers (user's catalogue: ~45%). Supporting
+  only: settles a glued side; for truncated sideless ERA text gives a side marked weak
+  ("side from part number only" → possible); when it contradicts a known side the part is
+  weak ("part-number pairing disagrees" → possible) **unless** an n±1 neighbour
+  (`neighbourPartNumbers`) is known with the opposite side (learned pair, e.g. 7812A512 LH /
+  7812A513 RH).
+- `sideFit` in suggestions.ts: CONFLICT/UNKNOWN/wrong hand → dropped; NONE fits any side;
+  weak → possible with the reason; a both-sides line → possible.
+- `buildMappings.ts`'s capture-time `sideConflict` still uses the clean ERA side only.
+
+**Fixture re-run (report given to the user 2026-10-21).** Scenarios over the real quote
+(capture quote-filled, then suggest for quote-empty's 19 lines): same VIN; mirrored to R/H;
+another VIN with the same pattern with/without the catalogue knowing QF1W. Compared with the
+installed build (`880bb5b`) and `d603b0e`:
+- L/H lines, same VIN or QF1W known: 8 stay confirmed. Hub bearing MR992372, knuckle 3870A180,
+  ball joint 4013A314 and tie rod end 4422A096 went confirmed → **possible** ("part-number
+  pairing disagrees"): all four are even (RH by parity) but LH by ERA (knuckle "KNUCKLELH",
+  tie rod "END ASSYTIE RODLH") or by the repairer line (hub bearing, ball joint — probably
+  unhanded in reality). Two of the four clean-ERA LH parts on this real quote disagree with
+  parity — worth watching; the user's 97% figure may not hold for suspension parts.
+- Mirrored R/H lines: the six possible cross-side suggestions (guard liners 5370C287/
+  5370C283, weathershield MZ330934, hub bearing, hub assembly 40202W030P, ball joint) are
+  **gone** — each is LH from its L/H repairer line and nothing says it fits either side.
+- Another VIN, no catalogue: nothing (unchanged since `d603b0e`; the installed build showed
+  all 12 via the old model-name/VIN-pattern tiers).
+- `tests/fixture-suggestions.test.ts` pins these results.
