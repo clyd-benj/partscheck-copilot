@@ -1,5 +1,5 @@
 import { buildYear, parseAsaProductionDate, parsePartsCheckMthYr } from './buildDate';
-import { normaliseDescription, parseEraSide, parseSide } from './normalise';
+import { parseDescription, parseEraSide, parseSide } from './normalise';
 import { POSITION_TOKENS } from './synonyms';
 import type { PartFitment, Vehicle } from '@/types/asacaps';
 import type { QuoteMapping, Side } from '@/types/quoteMapping';
@@ -8,39 +8,53 @@ import type { QuoteMapping, Side } from '@/types/quoteMapping';
  * Suggests ASA CAPS part numbers for the lines of a new PartsCheck quote.
  * Pure: the caller supplies the data (background worker, from IndexedDB).
  *
- * Two sources, in order:
- *  1. "from your quotes" — captured quoteMappings whose repairer wording
- *     matches the line.
- *  2. "from ASA catalogue" — only for lines source 1 has nothing for:
- *     fitments copied in ASA CAPS whose ASA description matches the line's
- *     wording through the same synonym map.
+ * Goal: trustworthy enough not to double-check. Showing nothing beats
+ * showing a wrong part, so every suggestion carries a confidence level:
  *
- * Within a vehicle tier, suggestions used on the quoted vehicle's ASA CAPS
- * classification (trim) rank first, then those closest in build date
- * (ranking factors, never filters). Chassis code is not used.
+ * CONFIRMED — all of:
+ *  - wording: the line's normalised words equal those of a wording already
+ *    linked to the part (a past repairer line answered by it, or its ASA
+ *    description), with exactly the same position words;
+ *  - side: the same side as that wording, or the part is known to fit
+ *    either side (ASA lists it without a side, or it has answered both LH
+ *    and RH lines), or ASA/ERA name the line's side for it;
+ *  - vehicle: used on this VIN; or on the same model code (ASA catalogue,
+ *    or inferred from the 8-character VIN pattern when every catalogue VIN
+ *    with that pattern has one model code) with build-date evidence — a
+ *    vehicle built within 12 months of this one, or vehicles built both
+ *    before and after it.
+ * POSSIBLE — same VIN or model code, but only similar wording, no
+ * build-date evidence, or a side that only ERA's (possibly truncated)
+ * description suggests. Shown greyed, never copied by "copy all".
+ * If two different part numbers would both be confirmed for one line, they
+ * contradict each other and both become possible.
+ * Everything else is dropped: model-name-only or VIN-pattern-only matches,
+ * and lines whose side/position shorthand can't be read ("wording unclear").
  *
- * Either way a candidate must
- *  - match the wording (identical normalised words, or close enough — see
- *    SIMILAR_THRESHOLD — with the same position words),
- *  - fit the side (see sideFits), and
- *  - come from the same vehicle, model code, VIN pattern or model.
- * NA rows and rows flagged as an ERA ordering slip are never suggested.
+ * Sources: "from your quotes" (captured quote mappings) and "from ASA
+ * catalogue" (fitments copied in ASA CAPS). Each part is scored per source
+ * and the better level kept (quotes on a tie).
  */
 
-/** Ranking tiers, best first. */
-export type MatchTier = 'vin' | 'modelCode' | 'vinPattern' | 'model';
-const TIER_ORDER: readonly MatchTier[] = ['vin', 'modelCode', 'vinPattern', 'model'];
+export type MatchTier = 'vin' | 'modelCode';
+const TIER_ORDER: readonly MatchTier[] = ['vin', 'modelCode'];
 
 export type SuggestionSource = 'quotes' | 'catalogue';
+export type ConfidenceLevel = 'confirmed' | 'possible';
+const LEVEL_ORDER: readonly ConfidenceLevel[] = ['confirmed', 'possible'];
 
-/** Minimum word-set overlap (Jaccard) for a "similar wording" match. */
+/** Minimum word-set overlap (Jaccard) for a "similar wording" (possible) match. */
 const SIMILAR_THRESHOLD = 0.75;
+/** A same-model-code vehicle built within this many months is date evidence. */
+const NEAR_BUILD_MONTHS = 12;
+/** Gaps beyond this many months are flagged in the evidence: possibly a facelift apart. */
+const FAR_BUILD_GAP_MONTHS = 24;
 const DEFAULT_LIMIT = 3;
 
 export interface SuggestionVehicle {
   vin?: string;
   model?: string;
-  /** From the ASA CAPS catalogue by VIN, if known. */
+  /** From the ASA CAPS catalogue by VIN, if known (else inferred from the VIN pattern). */
   modelCode?: string;
   /** Build month of the vehicle being quoted (see buildDate.ts), if known. */
   buildMonth?: number;
@@ -65,26 +79,23 @@ export interface SuggestionLine {
 export interface PartSuggestion {
   partNumber: string;
   source: SuggestionSource;
+  level: ConfidenceLevel;
+  /** Why a suggestion is only possible, for the panel. Empty when confirmed. */
+  cautions: string[];
   /** ERA description (quotes) or ASA description (catalogue). */
   description?: string;
   tier: MatchTier;
   /** 1 = same words; lower = similar wording. */
   wordingScore: number;
-  /** Earlier repairer wording this part answered, when not identical to this line (quotes only). */
+  /** The linked wording this line was matched to, when not identical. */
   similarWording?: string;
-  /** Distinct vehicles (by VIN, else quote) in the winning tier. */
+  /** Distinct vehicles (by VIN, else quote) behind the tier. */
   vehicleCount: number;
-  /**
-   * Months between the quoted vehicle's build and the nearest build this
-   * part was used on (winning tier); undefined when either side has no date.
-   */
+  /** Months to the nearest build behind the tier; undefined without dates. */
   buildGap?: number;
-  /**
-   * Winning-tier vehicles with the quoted vehicle's ASA CAPS classification
-   * (trim); 0 when either side's classification is unknown.
-   */
+  /** Of those vehicles, how many share the quoted vehicle's ASA trim. */
   sameTrimCount: number;
-  /** Matching records across all tiers. */
+  /** Records behind the tier. */
   timesUsed: number;
   lastSeen: string;
   isAccessory: boolean;
@@ -95,12 +106,14 @@ export interface LineSuggestions {
   id: string;
   description: string;
   side: Side;
+  /** Side/position shorthand couldn't be read; no suggestions are offered. */
+  wordingUnclear: boolean;
   suggestions: PartSuggestion[];
 }
 
 /**
- * The ASA CAPS catalogue: a fallback source of fitments, and the vehicle
- * records (classification by VIN) for both sources.
+ * The ASA CAPS catalogue: a source of fitments, and the vehicle records
+ * (model code, trim, production date by VIN) for both sources.
  */
 export interface CatalogueData {
   fitments: PartFitment[];
@@ -114,31 +127,53 @@ interface SuggestOptions {
   catalogue?: CatalogueData;
 }
 
-/** A stored record that could answer a line, from either source. */
-interface Candidate {
+/** One vehicle a part was used on (quote mapping) or listed for (ASA fitment). */
+interface PartRecord {
   source: SuggestionSource;
   partNumber: string;
-  words: Set<string>;
-  /** Hand of the part itself: LH/RH, or NONE when it fits either side. */
-  partSide: Side;
   vin?: string;
   modelCode?: string;
   model?: string;
-  /** What counts as one vehicle when counting evidence. */
-  vehicleKey: string;
-  /** Build month of the vehicle this record came from, if known. */
-  buildMonth?: number;
-  /** ASA CAPS classification of that vehicle, looked up by VIN at suggestion time. */
   classification?: string;
-  /** The wording that matched (repairer text for quotes). */
-  wording: string;
+  buildMonth?: number;
+  vehicleKey: string;
   description?: string;
   lastSeen: string;
   isAccessory: boolean;
 }
 
-function wordSet(normalised: string): Set<string> {
-  return new Set(normalised.split(' ').filter((word) => word.length > 0));
+/** A wording linked to a part: a past repairer line, or the part's ASA description. */
+interface LinkedWording {
+  partNumber: string;
+  text: string;
+  words: Set<string>;
+  side: Side;
+}
+
+/** What's known about whether a part is handed. */
+interface Handedness {
+  /** ASA lists it without a side, or it has answered both LH and RH lines. */
+  eitherSide: boolean;
+  /** Sides named for it by ASA or ERA descriptions. */
+  namedSides: Set<Side>;
+  /** Only ERA descriptions (which PartsCheck truncates) say it has no side. */
+  eraSaysUnhanded: boolean;
+}
+
+interface WordingMatch {
+  score: number;
+  /** The side fits fully (not only via ERA's possibly-truncated description). */
+  sideFull: boolean;
+  text: string;
+}
+
+function sameText(a: string | undefined, b: string | undefined): boolean {
+  return !!a && !!b && a.trim().toUpperCase() === b.trim().toUpperCase();
+}
+
+/** VIN up to the check digit (WMI + vehicle descriptor section). */
+function vinPattern(vin: string | undefined): string | undefined {
+  return vin && vin.length === 17 ? vin.slice(0, 8).toUpperCase() : undefined;
 }
 
 function samePositions(a: Set<string>, b: Set<string>): boolean {
@@ -154,89 +189,56 @@ function wordingScore(a: Set<string>, b: Set<string>): number {
   return shared / (a.size + b.size - shared);
 }
 
+/** Exact-and-confirmable beats everything; then higher score; then a fully fitting side. */
+function betterWording(candidate: WordingMatch, previous: WordingMatch | undefined): boolean {
+  if (!previous) return true;
+  const strong = (m: WordingMatch) => m.score === 1 && m.sideFull;
+  if (strong(candidate) !== strong(previous)) return strong(candidate);
+  if (candidate.score !== previous.score) return candidate.score > previous.score;
+  return candidate.sideFull && !previous.sideFull;
+}
+
 /**
- * Handed parts must match the line's side; a line that names both sides
- * accepts either hand. Unhanded parts fit any line. A handed part is never
- * suggested for a line with no side, since the wrong hand is a wrong part.
+ * Model code for a VIN: the catalogue's record, else inferred from the VIN
+ * pattern when the catalogue's VINs with that pattern all share one code
+ * (VINs without a known model code don't count either way).
  */
-function sideFits(lineSide: Side, partSide: Side): boolean {
-  if (partSide === 'NONE') return true;
-  if (partSide === 'BOTH') return lineSide === 'BOTH';
-  return lineSide === partSide || lineSide === 'BOTH';
+function modelCodeLookup(vehicles: Vehicle[]): (vin: string | undefined) => string | undefined {
+  const byVin = new Map(vehicles.map((v) => [v.vin.toUpperCase(), v]));
+  const codesByPattern = new Map<string, Set<string>>();
+  for (const v of vehicles) {
+    const pattern = vinPattern(v.vin);
+    if (!pattern || !v.modelCode) continue;
+    const codes = codesByPattern.get(pattern) ?? new Set<string>();
+    codes.add(v.modelCode.toUpperCase());
+    codesByPattern.set(pattern, codes);
+  }
+  return (vin) => {
+    if (!vin) return undefined;
+    const own = byVin.get(vin.toUpperCase())?.modelCode;
+    if (own) return own;
+    const codes = codesByPattern.get(vinPattern(vin) ?? '');
+    return codes && codes.size === 1 ? Array.from(codes)[0] : undefined;
+  };
 }
 
-function sameText(a: string | undefined, b: string | undefined): boolean {
-  return !!a && !!b && a.trim().toUpperCase() === b.trim().toUpperCase();
-}
-
-/** VIN up to the check digit (WMI + vehicle descriptor section). */
-function vinPattern(vin: string | undefined): string | undefined {
-  return vin && vin.length === 17 ? vin.slice(0, 8).toUpperCase() : undefined;
-}
-
-function tierFor(vehicle: SuggestionVehicle, candidate: Candidate): MatchTier | null {
-  if (sameText(vehicle.vin, candidate.vin)) return 'vin';
-  if (sameText(vehicle.modelCode, candidate.modelCode)) return 'modelCode';
-  const pattern = vinPattern(vehicle.vin);
-  if (pattern && pattern === vinPattern(candidate.vin)) return 'vinPattern';
-  if (sameText(vehicle.model, candidate.model)) return 'model';
+/**
+ * Whether a linked wording's side fits the line: 'full' (confirmable),
+ * 'weak' (possible only) or null (never).
+ */
+function sideFit(lineSide: Side, wordingSide: Side, hand: Handedness): 'full' | 'weak' | null {
+  const handed = lineSide === 'LH' || lineSide === 'RH';
+  // ASA/ERA name a different hand for this part: wrong part for this side.
+  if (handed && hand.namedSides.size > 0 && !hand.namedSides.has(lineSide)) return null;
+  if (lineSide === 'BOTH') {
+    // One part number can't fully answer a line asking for both sides.
+    return wordingSide === 'BOTH' || hand.eitherSide ? 'weak' : null;
+  }
+  if (lineSide === wordingSide) return 'full';
+  if (hand.eitherSide) return 'full';
+  if (handed && hand.namedSides.has(lineSide)) return 'full';
+  if (hand.eraSaysUnhanded) return 'weak';
   return null;
-}
-
-function quoteCandidates(
-  mappings: QuoteMapping[],
-  vehicleByVin: ReadonlyMap<string, Vehicle>,
-  excludeQuoteKey?: string,
-): Candidate[] {
-  return mappings
-    .filter((m) => !m.noGenuinePart && !m.sideConflict && m.quoteKey !== excludeQuoteKey)
-    .map((m): Candidate => ({
-      source: 'quotes',
-      partNumber: m.partNumber,
-      words: wordSet(m.repairerNormalised),
-      // The ERA description is the authority on whether the part is handed:
-      // repairers write "L/H/F HUB BEARING" for a part ERA lists as unsided.
-      partSide: m.eraDescription ? parseEraSide(m.eraDescription) : m.side,
-      vin: m.vin,
-      modelCode: m.modelCode,
-      model: m.model,
-      vehicleKey: m.vin ?? m.quoteKey,
-      // Mappings captured before build months were stored still have Mth/Yr.
-      buildMonth: m.buildMonth ?? parsePartsCheckMthYr(m.mthYr),
-      classification: m.vin ? vehicleByVin.get(m.vin)?.classification : undefined,
-      wording: m.repairerDescription,
-      description: m.eraDescription,
-      lastSeen: m.lastSeen,
-      isAccessory: m.isAccessory,
-    }));
-}
-
-/** Fitments with an ASA description (copied in ASA CAPS); quote-only fitments have none. */
-function catalogueCandidates(
-  fitments: PartFitment[],
-  vehicleByVin: ReadonlyMap<string, Vehicle>,
-): Candidate[] {
-  return fitments
-    .filter((f) => f.description && f.partNumber !== 'NA')
-    .map((f): Candidate => {
-      const vehicle = vehicleByVin.get(f.vin);
-      return {
-        source: 'catalogue',
-        partNumber: f.partNumber,
-        words: wordSet(normaliseDescription(f.description!)),
-        partSide: parseSide(f.description!),
-        vin: f.vin,
-        modelCode: vehicle?.modelCode,
-        model: vehicle?.model,
-        vehicleKey: f.vin,
-        buildMonth: parseAsaProductionDate(vehicle?.productionFrom),
-        classification: vehicle?.classification,
-        wording: f.description!,
-        description: f.description,
-        lastSeen: f.lastCapturedAt,
-        isAccessory: f.partNumber.startsWith('MZ'),
-      };
-    });
 }
 
 function day(iso: string): string {
@@ -247,32 +249,35 @@ function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
 }
 
-/** Gaps beyond this many months are flagged: possibly a facelift apart. */
-const FAR_BUILD_GAP_MONTHS = 24;
-
-/** The nearest build in `candidates` to the quoted vehicle, as a signed gap in months. */
 function nearestBuild(
-  vehicle: SuggestionVehicle,
-  candidates: Candidate[],
+  buildMonth: number | undefined,
+  records: PartRecord[],
 ): { gap: number; signed: number } | undefined {
-  if (vehicle.buildMonth === undefined) return undefined;
+  if (buildMonth === undefined) return undefined;
   let nearest: { gap: number; signed: number } | undefined;
-  for (const candidate of candidates) {
-    if (candidate.buildMonth === undefined) continue;
-    const signed = candidate.buildMonth - vehicle.buildMonth;
+  for (const record of records) {
+    if (record.buildMonth === undefined) continue;
+    const signed = record.buildMonth - buildMonth;
     if (!nearest || Math.abs(signed) < nearest.gap) nearest = { gap: Math.abs(signed), signed };
   }
   return nearest;
 }
 
-/** " built 2021–2022 (older build)" — empty when no record has a build date. */
+/** A vehicle built within 12 months, or builds on both sides of this one. */
+function hasBuildDateEvidence(buildMonth: number | undefined, records: PartRecord[]): boolean {
+  if (buildMonth === undefined) return false;
+  const months = records.map((r) => r.buildMonth).filter((m): m is number => m !== undefined);
+  if (months.some((m) => Math.abs(m - buildMonth) <= NEAR_BUILD_MONTHS)) return true;
+  return months.some((m) => m <= buildMonth) && months.some((m) => m >= buildMonth);
+}
+
 function describeBuilds(
-  candidates: Candidate[],
+  records: PartRecord[],
   nearest: { gap: number; signed: number } | undefined,
 ): string {
-  const years = candidates
-    .map((c) => c.buildMonth)
-    .filter((month): month is number => month !== undefined)
+  const years = records
+    .map((r) => r.buildMonth)
+    .filter((m): m is number => m !== undefined)
     .map(buildYear);
   if (years.length === 0) return '';
   const from = Math.min(...years);
@@ -282,113 +287,92 @@ function describeBuilds(
   return `${range} (${nearest.signed < 0 ? 'older' : 'newer'} build)`;
 }
 
-function sameTrim(vehicle: SuggestionVehicle, candidate: Candidate): boolean {
-  return sameText(vehicle.classification, candidate.classification);
-}
-
-/** " (2 same trim XTSHR8)" — empty when no winning vehicle shares the quoted trim. */
-function describeTrim(vehicle: SuggestionVehicle, sameTrimCount: number): string {
-  return sameTrimCount > 0 ? ` (${sameTrimCount} same trim ${vehicle.classification})` : '';
-}
-
 function describeEvidence(
   source: SuggestionSource,
   tier: MatchTier,
+  vehicle: SuggestionVehicle,
+  winning: PartRecord[],
   vehicleCount: number,
-  timesUsed: number,
+  sameTrimCount: number,
+  nearest: { gap: number; signed: number } | undefined,
   lastSeen: string,
-  winning: Candidate[],
-  details: string,
 ): string {
-  const verb = source === 'quotes' ? 'used' : 'seen in ASA CAPS';
   const last = `last ${day(lastSeen)}`;
-  const model = winning.find((c) => c.model)?.model ?? '';
-  switch (tier) {
-    case 'vin':
-      return source === 'quotes'
-        ? `used on this vehicle (${plural(timesUsed, 'time')}), ${last}`
-        : `seen in ASA CAPS for this vehicle, ${last}`;
-    case 'modelCode':
-      return `${verb} on ${plural(vehicleCount, 'vehicle')} · ${`${winning[0].modelCode} ${model}`.trim()}${details}, ${last}`;
-    case 'vinPattern':
-      return `${verb} on ${plural(vehicleCount, 'vehicle')} with this VIN pattern · ${model}${details}, ${last}`;
-    case 'model':
-      return `${verb} on ${plural(vehicleCount, 'vehicle')} · ${model}${details}, ${last}`;
+  if (tier === 'vin') {
+    return source === 'quotes'
+      ? `used on this vehicle (${plural(winning.length, 'time')}), ${last}`
+      : `seen in ASA CAPS for this vehicle, ${last}`;
   }
+  const verb = source === 'quotes' ? 'used' : 'seen in ASA CAPS';
+  const model = winning.find((r) => r.model)?.model ?? '';
+  const code = winning.find((r) => r.modelCode)?.modelCode ?? '';
+  const trim = sameTrimCount > 0 ? ` (${sameTrimCount} same trim ${vehicle.classification})` : '';
+  const builds = describeBuilds(winning, nearest);
+  return `${verb} on ${plural(vehicleCount, 'vehicle')} · ${`${code} ${model}`.trim()}${trim}${builds}, ${last}`;
 }
 
-function rank(
+function scoreSource(
+  source: SuggestionSource,
+  partNumber: string,
+  wording: WordingMatch,
   vehicle: SuggestionVehicle,
-  lineWords: Set<string>,
-  lineSide: Side,
-  candidates: Candidate[],
-  candidateWords: Set<string>[],
-): PartSuggestion[] {
-  const byPart = new Map<string, { candidate: Candidate; tier: MatchTier; score: number }[]>();
-  candidates.forEach((candidate, i) => {
-    const score = wordingScore(lineWords, candidateWords[i]);
-    if (score < SIMILAR_THRESHOLD) return;
-    if (!sideFits(lineSide, candidate.partSide)) return;
-    const tier = tierFor(vehicle, candidate);
-    if (!tier) return;
-    const hits = byPart.get(candidate.partNumber) ?? [];
-    hits.push({ candidate, tier, score });
-    byPart.set(candidate.partNumber, hits);
-  });
+  queryModelCode: string | undefined,
+  records: PartRecord[],
+): PartSuggestion | undefined {
+  const partRecords = records.filter((r) => r.source === source && r.partNumber === partNumber);
+  const sameVin = partRecords.filter((r) => sameText(r.vin, vehicle.vin));
+  const sameCode = partRecords.filter((r) => sameText(r.modelCode, queryModelCode));
+  const tier: MatchTier | undefined =
+    sameVin.length > 0 ? 'vin' : sameCode.length > 0 ? 'modelCode' : undefined;
+  // Model-name-only and VIN-pattern-only matches are never offered.
+  if (!tier) return undefined;
+  const winning = tier === 'vin' ? sameVin : sameCode;
 
-  const suggestions: PartSuggestion[] = Array.from(byPart, ([partNumber, hits]) => {
-    const tier = TIER_ORDER.find((t) => hits.some((hit) => hit.tier === t))!;
-    const winning = hits.filter((hit) => hit.tier === tier).map((hit) => hit.candidate);
-    const vehicleCount = new Set(winning.map((c) => c.vehicleKey)).size;
-    const nearest = nearestBuild(vehicle, winning);
-    const sameTrimCount = new Set(
-      winning.filter((c) => sameTrim(vehicle, c)).map((c) => c.vehicleKey),
-    ).size;
-    const best = hits.reduce((a, b) => (b.score > a.score ? b : a));
-    const latest = hits.reduce((a, b) =>
-      b.candidate.lastSeen > a.candidate.lastSeen ? b : a,
-    ).candidate;
-    return {
-      partNumber,
-      source: latest.source,
-      description: latest.description,
+  const exact = wording.score === 1;
+  const dated = tier === 'vin' || hasBuildDateEvidence(vehicle.buildMonth, sameCode);
+  const cautions: string[] = [];
+  if (!exact) cautions.push('similar wording');
+  if (!wording.sideFull) cautions.push('side not confirmed');
+  if (!dated) {
+    cautions.push(
+      vehicle.buildMonth === undefined ? 'build date unknown' : 'no vehicle built within 12 months',
+    );
+  }
+
+  const nearest = nearestBuild(vehicle.buildMonth, winning);
+  const vehicleCount = new Set(winning.map((r) => r.vehicleKey)).size;
+  const sameTrimCount = new Set(
+    winning
+      .filter((r) => sameText(r.classification, vehicle.classification))
+      .map((r) => r.vehicleKey),
+  ).size;
+  const latest = winning.reduce((a, b) => (b.lastSeen > a.lastSeen ? b : a));
+  return {
+    partNumber,
+    source,
+    level: cautions.length === 0 ? 'confirmed' : 'possible',
+    cautions,
+    description: latest.description,
+    tier,
+    wordingScore: wording.score,
+    similarWording: exact ? undefined : wording.text,
+    vehicleCount,
+    buildGap: nearest?.gap,
+    sameTrimCount,
+    timesUsed: winning.length,
+    lastSeen: latest.lastSeen,
+    isAccessory: latest.isAccessory,
+    evidence: describeEvidence(
+      source,
       tier,
-      wordingScore: best.score,
-      similarWording:
-        best.score < 1 && latest.source === 'quotes' ? best.candidate.wording : undefined,
+      vehicle,
+      winning,
       vehicleCount,
-      buildGap: nearest?.gap,
       sameTrimCount,
-      timesUsed: hits.length,
-      lastSeen: latest.lastSeen,
-      isAccessory: latest.isAccessory,
-      evidence: describeEvidence(
-        latest.source,
-        tier,
-        vehicleCount,
-        hits.length,
-        latest.lastSeen,
-        winning,
-        describeTrim(vehicle, sameTrimCount) + describeBuilds(winning, nearest),
-      ),
-    };
-  });
-
-  // Within a tier: same ASA trim first, then build-date closeness, then the
-  // rest. Neither filters — most shared parts span several trims, and Mth/Yr
-  // is only approximate. Undated suggestions sort after dated ones.
-  const gapOrder = (gap: number | undefined) => gap ?? Number.POSITIVE_INFINITY;
-  const trimOrder = (count: number) => (count > 0 ? 0 : 1);
-  return suggestions.sort(
-    (a, b) =>
-      TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier) ||
-      trimOrder(a.sameTrimCount) - trimOrder(b.sameTrimCount) ||
-      gapOrder(a.buildGap) - gapOrder(b.buildGap) ||
-      b.wordingScore - a.wordingScore ||
-      b.vehicleCount - a.vehicleCount ||
-      b.timesUsed - a.timesUsed ||
-      b.lastSeen.localeCompare(a.lastSeen),
-  );
+      nearest,
+      latest.lastSeen,
+    ),
+  };
 }
 
 export function suggestForLines(
@@ -397,37 +381,173 @@ export function suggestForLines(
   mappings: QuoteMapping[],
   options: SuggestOptions = {},
 ): LineSuggestions[] {
-  const vehicleByVin = new Map((options.catalogue?.vehicles ?? []).map((v) => [v.vin, v]));
-  const fromQuotes = quoteCandidates(mappings, vehicleByVin, options.excludeQuoteKey);
-  const fromQuotesWords = fromQuotes.map((c) => c.words);
-  const fromCatalogue = options.catalogue
-    ? catalogueCandidates(options.catalogue.fitments, vehicleByVin)
-    : [];
-  const fromCatalogueWords = fromCatalogue.map((c) => c.words);
+  const vehicles = options.catalogue?.vehicles ?? [];
+  const vehicleByVin = new Map(vehicles.map((v) => [v.vin.toUpperCase(), v]));
+  const modelCodeFor = modelCodeLookup(vehicles);
+  const queryModelCode = vehicle.modelCode ?? modelCodeFor(vehicle.vin);
+
+  const usableMappings = mappings.filter(
+    (m) => !m.noGenuinePart && !m.sideConflict && m.quoteKey !== options.excludeQuoteKey,
+  );
+  const usableFitments = (options.catalogue?.fitments ?? []).filter(
+    (f) => f.description && f.partNumber !== 'NA',
+  );
+
+  const records: PartRecord[] = [
+    ...usableMappings.map((m): PartRecord => {
+      const known = m.vin ? vehicleByVin.get(m.vin.toUpperCase()) : undefined;
+      return {
+        source: 'quotes',
+        partNumber: m.partNumber,
+        vin: m.vin,
+        modelCode: m.modelCode ?? modelCodeFor(m.vin),
+        model: m.model,
+        classification: known?.classification,
+        buildMonth:
+          m.buildMonth ??
+          parseAsaProductionDate(known?.productionFrom) ??
+          parsePartsCheckMthYr(m.mthYr),
+        vehicleKey: m.vin ?? m.quoteKey,
+        description: m.eraDescription,
+        lastSeen: m.lastSeen,
+        isAccessory: m.isAccessory,
+      };
+    }),
+    ...usableFitments.map((f): PartRecord => {
+      const known = vehicleByVin.get(f.vin.toUpperCase());
+      return {
+        source: 'catalogue',
+        partNumber: f.partNumber,
+        vin: f.vin,
+        modelCode: modelCodeFor(f.vin),
+        model: known?.model,
+        classification: known?.classification,
+        buildMonth: parseAsaProductionDate(known?.productionFrom),
+        vehicleKey: f.vin,
+        description: f.description,
+        lastSeen: f.lastCapturedAt,
+        isAccessory: f.partNumber.startsWith('MZ'),
+      };
+    }),
+  ];
+
+  // Wordings linked to each part, re-parsed with the current rules (stored
+  // normalised text may predate them). Unreadable ones are never matched.
+  const wordings: LinkedWording[] = [];
+  const addWording = (partNumber: string, text: string) => {
+    const parsed = parseDescription(text);
+    if (parsed.unclear || parsed.words.length === 0) return;
+    wordings.push({ partNumber, text, words: new Set(parsed.words), side: parsed.side });
+  };
+  for (const m of usableMappings) addWording(m.partNumber, m.repairerDescription);
+  for (const f of usableFitments) addWording(f.partNumber, f.description!);
+
+  const handedness = new Map<string, Handedness>();
+  const handOf = (partNumber: string): Handedness => {
+    const cached = handedness.get(partNumber);
+    if (cached) return cached;
+    const asaSides = usableFitments
+      .filter((f) => f.partNumber === partNumber)
+      .map((f) => parseSide(f.description!));
+    const eraSides = usableMappings
+      .filter((m) => m.partNumber === partNumber && m.eraDescription)
+      .map((m) => parseEraSide(m.eraDescription!));
+    const lineSides = new Set(
+      wordings.filter((w) => w.partNumber === partNumber).map((w) => w.side),
+    );
+    const hand: Handedness = {
+      eitherSide: asaSides.includes('NONE') || (lineSides.has('LH') && lineSides.has('RH')),
+      namedSides: new Set([...asaSides, ...eraSides].filter((s) => s === 'LH' || s === 'RH')),
+      eraSaysUnhanded:
+        asaSides.length === 0 && eraSides.length > 0 && eraSides.every((s) => s === 'NONE'),
+    };
+    handedness.set(partNumber, hand);
+    return hand;
+  };
 
   return lines.map((line) => {
-    const side = parseSide(line.description);
-    const lineWords = wordSet(normaliseDescription(line.description));
+    const parsed = parseDescription(line.description);
+    const base = { id: line.id, description: line.description, side: parsed.side };
+    if (parsed.unclear) return { ...base, wordingUnclear: true, suggestions: [] };
+    const lineWords = new Set(parsed.words);
 
-    let suggestions = rank(vehicle, lineWords, side, fromQuotes, fromQuotesWords);
-    if (suggestions.length === 0) {
-      suggestions = rank(vehicle, lineWords, side, fromCatalogue, fromCatalogueWords);
+    const wordingByPart = new Map<string, WordingMatch>();
+    for (const wording of wordings) {
+      const score = wordingScore(lineWords, wording.words);
+      if (score < SIMILAR_THRESHOLD) continue;
+      const fit = sideFit(parsed.side, wording.side, handOf(wording.partNumber));
+      if (!fit) continue;
+      const match = { score, sideFull: fit === 'full', text: wording.text };
+      if (betterWording(match, wordingByPart.get(wording.partNumber))) {
+        wordingByPart.set(wording.partNumber, match);
+      }
     }
 
+    const suggestions: PartSuggestion[] = [];
+    for (const [partNumber, wording] of wordingByPart) {
+      const fromQuotes = scoreSource(
+        'quotes',
+        partNumber,
+        wording,
+        vehicle,
+        queryModelCode,
+        records,
+      );
+      const fromCatalogue = scoreSource(
+        'catalogue',
+        partNumber,
+        wording,
+        vehicle,
+        queryModelCode,
+        records,
+      );
+      const best =
+        fromQuotes &&
+        (!fromCatalogue ||
+          LEVEL_ORDER.indexOf(fromQuotes.level) <= LEVEL_ORDER.indexOf(fromCatalogue.level))
+          ? fromQuotes
+          : fromCatalogue;
+      if (best) suggestions.push(best);
+    }
+
+    // Two different part numbers both confirmed for one line contradict each
+    // other: neither is trustworthy enough to copy without checking.
+    const confirmed = suggestions.filter((s) => s.level === 'confirmed');
+    if (confirmed.length > 1) {
+      for (const suggestion of confirmed) {
+        suggestion.level = 'possible';
+        suggestion.cautions.push('another part number also matches');
+      }
+    }
+
+    const gapOrder = (gap: number | undefined) => gap ?? Number.POSITIVE_INFINITY;
+    suggestions.sort(
+      (a, b) =>
+        LEVEL_ORDER.indexOf(a.level) - LEVEL_ORDER.indexOf(b.level) ||
+        TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier) ||
+        Number(b.sameTrimCount > 0) - Number(a.sameTrimCount > 0) ||
+        gapOrder(a.buildGap) - gapOrder(b.buildGap) ||
+        b.wordingScore - a.wordingScore ||
+        b.vehicleCount - a.vehicleCount ||
+        b.timesUsed - a.timesUsed ||
+        b.lastSeen.localeCompare(a.lastSeen),
+    );
+
     return {
-      id: line.id,
-      description: line.description,
-      side,
+      ...base,
+      wordingUnclear: false,
       suggestions: suggestions.slice(0, options.limit ?? DEFAULT_LIMIT),
     };
   });
 }
 
 /**
- * Text for "copy all in order": the top suggestion per line, one per line,
- * with an empty line where there's none so positions still line up with
- * the PartsCheck lines when keying into ERA.
+ * Text for "copy all in order": each line's top CONFIRMED suggestion, one
+ * per line, with an empty line where there's none so positions still line
+ * up with the PartsCheck lines when keying into ERA.
  */
 export function copyAllText(lines: Pick<LineSuggestions, 'suggestions'>[]): string {
-  return lines.map((line) => line.suggestions[0]?.partNumber ?? '').join('\n');
+  return lines
+    .map((line) => line.suggestions.find((s) => s.level === 'confirmed')?.partNumber ?? '')
+    .join('\n');
 }

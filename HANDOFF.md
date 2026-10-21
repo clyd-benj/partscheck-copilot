@@ -601,7 +601,7 @@ npm run build      # tsc -b && vite build -> dist/
 npm run dev        # Vite watch mode with HMR; load dist/ as unpacked, refresh on changes
 npm run lint       # eslint . --max-warnings 0
 npm run typecheck  # tsc -b only
-npm test           # vitest run — 19 files, 215 tests, all currently passing
+npm test           # vitest run — 19 files, 244 tests, all currently passing
 npm run test:watch
 npm run format     # prettier --write .
 ```
@@ -913,3 +913,60 @@ suggestions. Rules now:
 - Tests: `classification-ranking.test.ts` (same-trim ranking, tier precedence, never-filter,
   evidence, catalogue source, unknown classification ⇒ unchanged order, suggestForQuote via the
   DB, refresh listener).
+
+### 9.8 Confidence levels — trust over coverage (supersedes the matching/ranking rules in §9.3–9.7)
+
+User goal change (2026-10-21): suggestions must be trustworthy enough not to double-check once
+there's plenty of data; **showing nothing beats showing a wrong part.** Triggered by real-use
+bugs: a 2011 Outlander offered a part used only on a 2018 Outlander (old model-name tier), and
+"R/F SHOCK ABSORBER" offered the R/R shock (R/F and R/R weren't parsed, so FRONT/REAR were lost
+and a 0.75 Jaccard match let it through).
+
+**Parsing** (`normalise.ts` `parseDescription()`, data in `synonyms.ts`):
+- `R/F`, `L/F`, `RF`, `LF` → right/left front; `R/R` → right rear; `L/R` **as a prefix** → left
+  rear. `L/R` elsewhere, or a prefix `L/R` followed by FRONT, may mean "left and right" →
+  **unclear**. After PHRASE_SYNONYMS (F/LAMP, R/BAR…), `L/word` → LH, `F/word` → FRONT,
+  `R/word` (rear or right?) → unclear. Leftover single `R`/`F`/`L` and `LR` are never kept as
+  words; they make the line unclear. All 19 lines of the real fixture parse clear.
+- An unclear line gets **no suggestions** and the panel shows "wording unclear". Stored
+  wordings are **re-parsed at suggestion time** (stored `repairerNormalised` may predate the
+  rules); unclear stored wordings are never matched.
+
+**Levels** (`suggestions.ts`):
+- **CONFIRMED** = exact wording (line's word set equals a wording already linked to the part:
+  any past repairer line answered by it or its ASA description — so a new wording learned on
+  one vehicle confirms on another) + side fits fully + (same VIN, or same model code with
+  build-date evidence: a vehicle with the part built within 12 months, or builds on both sides
+  of this one).
+- **POSSIBLE** = same VIN or model code but: similar wording only (Jaccard ≥ 0.75, same
+  position words), or no date evidence ("no vehicle built within 12 months" / "build date
+  unknown"), or the side only fits because ERA's text (truncated by PartsCheck) shows no side
+  ("side not confirmed"), or the line asks for both sides.
+- **Dropped**: model-name-only and VIN-pattern-only matches (tiers `vinPattern`/`model` are
+  gone; `MatchTier` is now `'vin' | 'modelCode'`), handed parts for the other side or for a
+  side-less line, unclear lines.
+- **Model code**: query and past records use the ASA record by VIN, else **inferred from the
+  8-char VIN pattern** only when every catalogue VIN with that pattern that has a model code
+  shares one (VINs without a code don't count either way). A new quote whose VIN isn't in ASA
+  CAPS and whose pattern isn't known gets nothing until ASA CAPS captures it (the §9.7 refresh
+  then recomputes).
+- **Side**: 'full' when the wording's side equals the line's, or the part is known to fit
+  either side (an ASA description without a side, or it has answered both LH and RH lines), or
+  ASA/ERA name the line's side for it; never when ASA/ERA name the other hand; 'weak'
+  (possible) when only ERA descriptions say "no side".
+- **Conflicts**: if two different part numbers would both be confirmed for one line, both
+  become possible ("another part number also matches") — added while updating tests: the
+  catalogue-link test had a quote and an ASA fitment giving different numbers for the same
+  line on the same VIN.
+- Each part is scored per source (quotes / catalogue; same rules) and the better level kept,
+  quotes on a tie — so a confirmed catalogue match can beat a possible quote match.
+- Sort: level → tier → same trim → build gap → wording → vehicle count → times used →
+  recency. `PartSuggestion` gained `level` and `cautions`; `LineSuggestions` gained
+  `wordingUnclear`.
+- **Copy all in order** copies each line's top **confirmed** part only (blank otherwise); the
+  header reads "Confirmed for N of M lines". The panel shows confirmed rows with a green
+  "confirmed" label and groups the rest under "possible, check", greyed, with their cautions.
+- Tests: `suggestions.test.ts` (rewritten: the reported Outlander and shock cases, R/F ↔ R/F
+  and RH FRONT, 2010+2013 KK1T confirms 2011, VIN-pattern inference, linked wordings, side,
+  conflicts, catalogue, the real fixture), `normalise.test.ts` (parsing), and the ranking files
+  updated (`build-date-ranking`, `classification-ranking`, `catalogue-link`).

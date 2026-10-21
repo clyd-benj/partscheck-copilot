@@ -57,6 +57,20 @@ const QUERY: SuggestionVehicle = {
   classification: "XTSHR8",
 };
 
+function catalogueFitment(v: string, partNumber: string): PartFitment {
+  return {
+    id: `${v}::${partNumber}`,
+    vin: v,
+    sessionId: "s",
+    partNumber,
+    description: "HOOD",
+    sources: ["asacaps"],
+    timesCopied: 1,
+    firstCapturedAt: NOW,
+    lastCapturedAt: NOW,
+  };
+}
+
 function rank(query: SuggestionVehicle, mappings: QuoteMapping[], vehicles: Vehicle[], fitments: PartFitment[] = []) {
   return suggestForLines(query, [{ id: "1", description: "BONNET" }], mappings, {
     catalogue: { fitments, vehicles },
@@ -65,100 +79,86 @@ function rank(query: SuggestionVehicle, mappings: QuoteMapping[], vehicles: Vehi
 }
 
 describe("same-trim (ASA CAPS classification) ranking", () => {
-  it("ranks parts used on the same trim first within a tier, ahead of build-date closeness", () => {
-    const sameTrimOld = vin();
-    const otherTrimNew = vin();
+  // KK1T vehicles all built within 12 months of the query, so everything is confirmed.
+  const kk1t = (classification: string | undefined, buildMonth: number) => {
+    const v = vin();
+    return { v, vehicle: vehicle(v, classification, { productionFrom: undefined }), buildMonth };
+  };
+
+  it("ranks parts used on the same trim first, ahead of build-date closeness (two matches: both possible)", () => {
+    const same = kk1t("XTSHR8", ym(2021, 8));
+    const other = kk1t("XTSLR8", ym(2022, 5));
     const ranked = rank(
       QUERY,
-      [mapping(sameTrimOld, "SAME-TRIM", { buildMonth: ym(2016, 1) }), mapping(otherTrimNew, "OTHER-TRIM", { buildMonth: ym(2022, 5) })],
-      [vehicle(sameTrimOld, "XTSHR8"), vehicle(otherTrimNew, "XTSLR8")],
+      [mapping(same.v, "SAME-TRIM", { buildMonth: same.buildMonth }), mapping(other.v, "OTHER-TRIM", { buildMonth: other.buildMonth })],
+      [same.vehicle, other.vehicle],
     );
-    expect(ranked.map((s) => [s.partNumber, s.sameTrimCount, s.buildGap])).toEqual([
-      ["SAME-TRIM", 1, 77],
-      ["OTHER-TRIM", 0, 1],
+    expect(ranked.map((s) => [s.partNumber, s.level, s.sameTrimCount, s.buildGap])).toEqual([
+      ["SAME-TRIM", "possible", 1, 10],
+      ["OTHER-TRIM", "possible", 0, 1],
     ]);
   });
 
-  it("uses build-date closeness among same-trim parts", () => {
-    const [a, b] = [vin(), vin()];
+  it("never lifts a possible part above a confirmed one", () => {
+    const sameButFar = kk1t("XTSHR8", ym(2016, 1));
+    const otherNear = kk1t("XTSLR8", ym(2022, 5));
     const ranked = rank(
       QUERY,
-      [mapping(a, "FAR", { buildMonth: ym(2018, 1) }), mapping(b, "NEAR", { buildMonth: ym(2022, 1) })],
-      [vehicle(a, "XTSHR8"), vehicle(b, "XTSHR8")],
+      [mapping(sameButFar.v, "SAME-TRIM", { buildMonth: sameButFar.buildMonth }), mapping(otherNear.v, "OTHER-TRIM", { buildMonth: otherNear.buildMonth })],
+      [sameButFar.vehicle, otherNear.vehicle],
     );
-    expect(ranked.map((s) => s.partNumber)).toEqual(["NEAR", "FAR"]);
-  });
-
-  it("never overrides the vehicle tier", () => {
-    const [codeOtherTrim, modelSameTrim] = [vin(), vin()];
-    const ranked = rank(
-      QUERY,
-      [mapping(codeOtherTrim, "CODE"), mapping(modelSameTrim, "MODEL", { modelCode: undefined })],
-      [vehicle(codeOtherTrim, "XTSLR8"), vehicle(modelSameTrim, "XTSHR8", { modelCode: undefined })],
-    );
-    expect(ranked.map((s) => [s.partNumber, s.tier])).toEqual([
-      ["CODE", "modelCode"],
-      ["MODEL", "model"],
+    expect(ranked.map((s) => [s.partNumber, s.level])).toEqual([
+      ["OTHER-TRIM", "confirmed"],
+      ["SAME-TRIM", "possible"],
     ]);
   });
 
   it("never filters: a part only seen on other trims is still suggested", () => {
-    const other = vin();
-    const ranked = rank(QUERY, [mapping(other, "OTHER-TRIM")], [vehicle(other, "GLXR8")]);
-    expect(ranked.map((s) => [s.partNumber, s.sameTrimCount])).toEqual([["OTHER-TRIM", 0]]);
+    const other = kk1t("GLXR8", ym(2022, 1));
+    const ranked = rank(QUERY, [mapping(other.v, "OTHER-TRIM", { buildMonth: other.buildMonth })], [other.vehicle]);
+    expect(ranked.map((s) => [s.partNumber, s.level, s.sameTrimCount])).toEqual([["OTHER-TRIM", "confirmed", 0]]);
   });
 
   it("shows how many vehicles share the trim in the evidence", () => {
-    const [a, b, c] = [vin(), vin(), vin()];
+    const a = kk1t("XTSHR8", ym(2021, 9));
+    const b = kk1t("XTSHR8", ym(2022, 2));
+    const c = kk1t("GLXR8", ym(2022, 8));
     const [s] = rank(
       QUERY,
-      [
-        mapping(a, "5900A001", { buildMonth: ym(2021, 4) }),
-        mapping(b, "5900A001", { buildMonth: ym(2022, 2) }),
-        mapping(c, "5900A001", { buildMonth: ym(2022, 8) }),
-      ],
-      [vehicle(a, "XTSHR8"), vehicle(b, "XTSHR8"), vehicle(c, "GLXR8")],
+      [a, b, c].map((x) => mapping(x.v, "5900A001", { buildMonth: x.buildMonth })),
+      [a.vehicle, b.vehicle, c.vehicle],
     );
     expect(s.evidence).toBe("used on 3 vehicles · KK1T Triton (2 same trim XTSHR8) built 2021–2022, last 2026-10-01");
   });
 
   it("applies to ASA catalogue suggestions too", () => {
     const [same, other] = [vin(), vin()];
-    const fitment = (v: string, partNumber: string): PartFitment => ({
-      id: `${v}::${partNumber}`,
-      vin: v,
-      sessionId: "s",
-      partNumber,
-      description: "HOOD",
-      sources: ["asacaps"],
-      timesCopied: 1,
-      firstCapturedAt: NOW,
-      lastCapturedAt: NOW,
-    });
     const ranked = suggestForLines(QUERY, [{ id: "1", description: "HOOD" }], [], {
       catalogue: {
-        vehicles: [vehicle(other, "XTSLR8", { productionFrom: "2022.5.1" }), vehicle(same, "XTSHR8", { productionFrom: "2015.1.1" })],
-        fitments: [fitment(other, "OTHER-TRIM"), fitment(same, "SAME-TRIM")],
+        vehicles: [
+          vehicle(other, "XTSLR8", { productionFrom: "2022.5.1" }),
+          vehicle(same, "XTSHR8", { productionFrom: "2021.9.1" }),
+        ],
+        fitments: [catalogueFitment(other, "OTHER-TRIM"), catalogueFitment(same, "SAME-TRIM")],
       },
     })[0].suggestions;
-    expect(ranked.map((s) => [s.partNumber, s.source])).toEqual([
-      ["SAME-TRIM", "catalogue"],
-      ["OTHER-TRIM", "catalogue"],
+    expect(ranked.map((s) => [s.partNumber, s.source, s.level])).toEqual([
+      ["SAME-TRIM", "catalogue", "possible"],
+      ["OTHER-TRIM", "catalogue", "possible"],
     ]);
-    expect(ranked[0].evidence).toBe(
-      "seen in ASA CAPS on 1 vehicle · KK1T Triton (1 same trim XTSHR8) built 2015 (older build), last 2026-10-01",
-    );
+    expect(ranked[0].evidence).toBe("seen in ASA CAPS on 1 vehicle · KK1T Triton (1 same trim XTSHR8) built 2021, last 2026-10-01");
   });
 });
 
 describe("unknown classification leaves the current order unchanged", () => {
   const [a, b, c] = ["MMBXXXXXXXX100001", "MMBXXXXXXXX100002", "MMBXXXXXXXX100003"];
   const mappings = [
-    mapping(a, "COMMON", { buildMonth: ym(2019, 1) }),
-    mapping(b, "COMMON", { buildMonth: ym(2019, 2) }),
+    mapping(a, "COMMON", { buildMonth: ym(2021, 9) }),
+    mapping(b, "COMMON", { buildMonth: ym(2021, 10) }),
     mapping(c, "CLOSE", { buildMonth: ym(2022, 6) }),
   ];
-  const strip = (list: ReturnType<typeof rank>) => list.map(({ partNumber, evidence }) => ({ partNumber, evidence }));
+  const strip = (list: ReturnType<typeof rank>) =>
+    list.map(({ partNumber, level, evidence }) => ({ partNumber, level, evidence }));
   const baseline = strip(rank({ ...QUERY, classification: undefined }, mappings, []));
 
   it("when the quoted VIN isn't in the catalogue", () => {
@@ -183,23 +183,20 @@ describe("suggestForQuote uses the quoted VIN's classification from the catalogu
     const [same, other] = [vin(), vin()];
     await AsaCapsDatabase.putQuoteMappings([
       mapping(other, "OTHER-TRIM", { buildMonth: ym(2022, 6) }),
-      mapping(same, "SAME-TRIM", { buildMonth: ym(2017, 1) }),
+      mapping(same, "SAME-TRIM", { buildMonth: ym(2021, 10) }),
     ]);
     await AsaCapsDatabase.putVehicle(vehicle(same, "XTSHR8"));
     await AsaCapsDatabase.putVehicle(vehicle(other, "XTSLR8"));
     const quoted = { vin: QUERY.vin, model: "Triton", mthYr: "6/2022" };
     const lines = [{ id: "1", description: "BONNET" }];
 
-    // Not yet captured in ASA CAPS: no trim, so the closer build wins.
-    expect((await suggestForQuote(quoted, lines))[0].suggestions.map((s) => s.partNumber)).toEqual([
-      "OTHER-TRIM",
-      "SAME-TRIM",
-    ]);
+    // Not yet captured in ASA CAPS: no trim (and no model code), so nothing is offered.
+    expect((await suggestForQuote(quoted, lines))[0].suggestions).toEqual([]);
 
-    await AsaCapsDatabase.putVehicle(vehicle(QUERY.vin!, "XTSHR8", { modelCode: undefined }));
-    expect((await suggestForQuote(quoted, lines))[0].suggestions.map((s) => s.partNumber)).toEqual([
-      "SAME-TRIM",
-      "OTHER-TRIM",
+    await AsaCapsDatabase.putVehicle(vehicle(QUERY.vin!, "XTSHR8"));
+    expect((await suggestForQuote(quoted, lines))[0].suggestions.map((s) => [s.partNumber, s.level])).toEqual([
+      ["SAME-TRIM", "possible"],
+      ["OTHER-TRIM", "possible"],
     ]);
   });
 });

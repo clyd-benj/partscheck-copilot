@@ -1,193 +1,83 @@
 import { describe, it, expect } from "vitest";
 import { suggestForLines, type SuggestionVehicle } from "@/services/quoteCapture/suggestions";
-import { normaliseDescription, parseSide } from "@/services/quoteCapture/normalise";
-import type { PartFitment, Vehicle } from "@/types/asacaps";
 import type { QuoteMapping } from "@/types/quoteMapping";
+import { fitment, mapping, newVin, vehicle, ym } from "./suggestionHelpers";
 
-const ym = (year: number, month: number) => year * 12 + month;
+const QUERY: SuggestionVehicle = { vin: newVin(), model: "Triton", modelCode: "KK1T", buildMonth: ym(2022, 6) };
+const rank = (query: SuggestionVehicle, mappings: QuoteMapping[]) =>
+  suggestForLines(query, [{ id: "1", description: "BONNET" }], mappings, { limit: 5 })[0].suggestions;
+const kk1t = (partNumber: string, buildMonth?: number, extra: Partial<QuoteMapping> = {}) =>
+  mapping({ partNumber, modelCode: "KK1T", buildMonth, ...extra });
 
-let seq = 0;
-function mapping(overrides: Partial<QuoteMapping>): QuoteMapping {
-  seq += 1;
-  const repairerDescription = overrides.repairerDescription ?? "BONNET";
-  return {
-    id: `draft:${seq}::1`,
-    quoteKey: `draft:${seq}`,
-    rowNo: 1,
-    iteration: 0,
-    draftItemId: String(seq),
-    repairerDescription,
-    repairerNormalised: normaliseDescription(repairerDescription),
-    side: parseSide(repairerDescription),
-    partNumber: "5900A001",
-    eraDescription: "HOOD",
-    noGenuinePart: false,
-    isAccessory: false,
-    sideConflict: false,
-    vin: `MMBXXXXXXXX${String(seq).padStart(6, "0")}`,
-    model: "Triton",
-    firstSeen: "2026-10-01T00:00:00.000Z",
-    lastSeen: "2026-10-01T00:00:00.000Z",
-    ...overrides,
-  };
-}
-
-const TRITON: SuggestionVehicle = { vin: "MMAJYKL10PH999999", model: "Triton", buildMonth: ym(2022, 6) };
-const rank = (vehicle: SuggestionVehicle, mappings: QuoteMapping[], limit = 5) =>
-  suggestForLines(vehicle, [{ id: "1", description: "BONNET" }], mappings, { limit })[0].suggestions;
-
-describe("build-date ranking", () => {
-  it("ranks the closest build first within a tier, ahead of vehicle count", () => {
+describe("build-date evidence and ranking", () => {
+  it("ranks the closest build first, ahead of vehicle count (two matches: both possible)", () => {
     const stored = [
-      mapping({ partNumber: "OLD", buildMonth: ym(2016, 3) }),
-      mapping({ partNumber: "OLD", buildMonth: ym(2016, 5) }),
-      mapping({ partNumber: "OLD", buildMonth: ym(2016, 8) }),
-      mapping({ partNumber: "NEW", buildMonth: ym(2022, 1) }),
+      kk1t("FAR", ym(2021, 7)),
+      kk1t("FAR", ym(2021, 8)),
+      kk1t("FAR", ym(2021, 9)),
+      kk1t("NEAR", ym(2022, 4)),
     ];
-    const ranked = rank(TRITON, stored);
-    expect(ranked.map((s) => [s.partNumber, s.buildGap, s.vehicleCount])).toEqual([
-      ["NEW", 5, 1],
-      ["OLD", 70, 3],
+    expect(rank(QUERY, stored).map((s) => [s.partNumber, s.level, s.buildGap, s.vehicleCount])).toEqual([
+      ["NEAR", "possible", 2, 1],
+      ["FAR", "possible", 9, 3],
     ]);
   });
 
-  it("never filters: a far-off build is still suggested", () => {
-    const ranked = rank(TRITON, [mapping({ partNumber: "OLD", buildMonth: ym(2008, 1) })]);
-    expect(ranked.map((s) => s.partNumber)).toEqual(["OLD"]);
+  it("builds on both sides of this one are date evidence even when both are far", () => {
+    const stored = [kk1t("SPAN", ym(2019, 1)), kk1t("SPAN", ym(2025, 1))];
+    expect(rank(QUERY, stored)[0]).toMatchObject({ level: "confirmed", buildGap: 31 });
   });
 
-  it("doesn't override the vehicle tier", () => {
-    const stored = [
-      mapping({ partNumber: "SAME-CODE-OLD", modelCode: "KK1T", buildMonth: ym(2015, 1) }),
-      mapping({ partNumber: "MODEL-CLOSE", buildMonth: ym(2022, 6) }),
-    ];
-    const ranked = rank({ ...TRITON, modelCode: "KK1T" }, stored);
-    expect(ranked.map((s) => [s.partNumber, s.tier])).toEqual([
-      ["SAME-CODE-OLD", "modelCode"],
-      ["MODEL-CLOSE", "model"],
-    ]);
+  it("a far build on one side only is possible, flagged older/newer", () => {
+    const [older] = rank(QUERY, [kk1t("OLD", ym(2020, 5))]);
+    expect(older).toMatchObject({ level: "possible", buildGap: 25 });
+    expect(older.evidence).toBe("used on 1 vehicle · KK1T Triton built 2020 (older build), last 2026-10-01");
+
+    const [newer] = rank({ ...QUERY, buildMonth: ym(2016, 1) }, [kk1t("NEW", ym(2018, 2))]);
+    expect(newer.evidence).toBe("used on 1 vehicle · KK1T Triton built 2018 (newer build), last 2026-10-01");
   });
 
-  it("puts undated suggestions after dated ones in the same tier", () => {
-    const stored = [
-      mapping({ partNumber: "UNDATED" }),
-      mapping({ partNumber: "UNDATED" }),
-      mapping({ partNumber: "DATED", buildMonth: ym(2019, 1) }),
-    ];
-    expect(rank(TRITON, stored).map((s) => s.partNumber)).toEqual(["DATED", "UNDATED"]);
+  it("exactly 12 months away still counts; 13 doesn't", () => {
+    expect(rank(QUERY, [kk1t("A", ym(2021, 6))])[0].level).toBe("confirmed");
+    expect(rank(QUERY, [kk1t("B", ym(2021, 5))])[0].level).toBe("possible");
   });
 
-  it("falls back to the existing order when the quoted vehicle has no build date", () => {
-    const stored = [
-      mapping({ partNumber: "CLOSE-BUT-RARE", buildMonth: ym(2022, 6) }),
-      mapping({ partNumber: "COMMON", buildMonth: ym(2012, 1) }),
-      mapping({ partNumber: "COMMON", buildMonth: ym(2012, 2) }),
-    ];
-    const ranked = rank({ ...TRITON, buildMonth: undefined }, stored);
-    expect(ranked.map((s) => [s.partNumber, s.buildGap])).toEqual([
-      ["COMMON", undefined],
-      ["CLOSE-BUT-RARE", undefined],
+  it("puts undated parts after dated ones, and an undated part is only possible", () => {
+    const stored = [kk1t("UNDATED"), kk1t("UNDATED"), kk1t("DATED", ym(2022, 1))];
+    expect(rank(QUERY, stored).map((s) => [s.partNumber, s.level])).toEqual([
+      ["DATED", "confirmed"],
+      ["UNDATED", "possible"],
     ]);
   });
 
   it("uses Mth/Yr on mappings captured before build months were stored", () => {
-    const stored = [
-      mapping({ partNumber: "OLD", mthYr: "1/2014" }),
-      mapping({ partNumber: "OLD", mthYr: "2/2014" }),
-      mapping({ partNumber: "NEW", mthYr: "06/2022" }),
-    ];
-    expect(rank(TRITON, stored).map((s) => [s.partNumber, s.buildGap])).toEqual([
-      ["NEW", 0],
-      ["OLD", 100],
+    expect(rank(QUERY, [kk1t("OLD-RECORD", undefined, { mthYr: "1/2022" })])[0]).toMatchObject({
+      level: "confirmed",
+      buildGap: 5,
+    });
+  });
+
+  it("shows the build range of the vehicles behind the suggestion", () => {
+    const stored = [kk1t("P", ym(2021, 9)), kk1t("P", ym(2022, 2)), kk1t("P", ym(2022, 8))];
+    expect(rank(QUERY, stored)[0].evidence).toBe("used on 3 vehicles · KK1T Triton built 2021–2022, last 2026-10-01");
+  });
+
+  it("uses ASA production dates for catalogue suggestions", () => {
+    const near = newVin("MMBXXXX5");
+    const far = newVin("MMBXXXX6");
+    const result = suggestForLines(QUERY, [{ id: "1", description: "HOOD" }], [], {
+      catalogue: {
+        vehicles: [
+          vehicle(near, { modelCode: "KK1T", productionFrom: "2021.11.30" }),
+          vehicle(far, { modelCode: "KK1T", productionFrom: "2015.4.1" }),
+        ],
+        fitments: [fitment(near, "NEAR", "HOOD"), fitment(far, "FAR", "HOOD")],
+      },
+    })[0].suggestions;
+    expect(result.map((s) => [s.partNumber, s.source, s.level, s.buildGap])).toEqual([
+      ["NEAR", "catalogue", "confirmed", 7],
+      ["FAR", "catalogue", "possible", 86],
     ]);
-  });
-});
-
-describe("build range in the evidence", () => {
-  it("shows the build years of the vehicles the part was used on", () => {
-    const stored = [2021, 2022, 2022].map((year, i) =>
-      mapping({ partNumber: "5900A001", modelCode: "KK1T", buildMonth: ym(year, 3 + i) }),
-    );
-    const [s] = rank({ ...TRITON, modelCode: "KK1T" }, stored);
-    expect(s.evidence).toBe("used on 3 vehicles · KK1T Triton built 2021–2022, last 2026-10-01");
-  });
-
-  it("shows a single year once", () => {
-    const [s] = rank(TRITON, [mapping({ buildMonth: ym(2022, 2) })]);
-    expect(s.evidence).toBe("used on 1 vehicle · Triton built 2022, last 2026-10-01");
-  });
-
-  it("flags builds more than 24 months older or newer", () => {
-    const [older] = rank(TRITON, [mapping({ buildMonth: ym(2020, 5) })]);
-    expect(older.buildGap).toBe(25);
-    expect(older.evidence).toBe("used on 1 vehicle · Triton built 2020 (older build), last 2026-10-01");
-
-    const [newer] = rank({ ...TRITON, buildMonth: ym(2016, 1) }, [mapping({ buildMonth: ym(2018, 2) })]);
-    expect(newer.evidence).toBe("used on 1 vehicle · Triton built 2018 (newer build), last 2026-10-01");
-  });
-
-  it("doesn't flag a gap of exactly 24 months", () => {
-    const [s] = rank(TRITON, [mapping({ buildMonth: ym(2020, 6) })]);
-    expect(s.evidence).toBe("used on 1 vehicle · Triton built 2020, last 2026-10-01");
-  });
-
-  it("says nothing about builds when no record has a date", () => {
-    const [s] = rank(TRITON, [mapping({})]);
-    expect(s.evidence).toBe("used on 1 vehicle · Triton, last 2026-10-01");
-  });
-});
-
-describe("build-date ranking for ASA catalogue suggestions", () => {
-  const vehicle = (vin: string, productionFrom?: string): Vehicle => ({
-    id: vin,
-    vin,
-    model: "TRITON",
-    modelCode: "KK1T",
-    productionFrom,
-    rawText: "",
-    firstSeen: "2026-01-01T00:00:00.000Z",
-    lastSeen: "2026-01-01T00:00:00.000Z",
-  });
-  const fitment = (vin: string, partNumber: string): PartFitment => ({
-    id: `${vin}::${partNumber}`,
-    vin,
-    sessionId: "s",
-    partNumber,
-    description: "HOOD",
-    sources: ["asacaps"],
-    timesCopied: 1,
-    firstCapturedAt: "2026-10-12T00:00:00.000Z",
-    lastCapturedAt: "2026-10-12T00:00:00.000Z",
-  });
-  const query: SuggestionVehicle = { vin: "MMAJYKL10PH999999", model: "Triton", modelCode: "KK1T", buildMonth: ym(2022, 6) };
-  const catalogueRank = (vehicles: Vehicle[], fitments: PartFitment[]) =>
-    suggestForLines(query, [{ id: "1", description: "HOOD" }], [], { catalogue: { vehicles, fitments }, limit: 5 })[0]
-      .suggestions;
-
-  it("ranks by the ASA CAPS production date of each vehicle", () => {
-    const ranked = catalogueRank(
-      [vehicle("MMBA0000000000001", "2015.2.1"), vehicle("MMBA0000000000002", "2015.4.1"), vehicle("MMBA0000000000003", "2021.11.30")],
-      [fitment("MMBA0000000000001", "OLD"), fitment("MMBA0000000000002", "OLD"), fitment("MMBA0000000000003", "NEW")],
-    );
-    expect(ranked.map((s) => [s.partNumber, s.source, s.buildGap])).toEqual([
-      ["NEW", "catalogue", 7],
-      ["OLD", "catalogue", 86],
-    ]);
-    expect(ranked[0].evidence).toBe("seen in ASA CAPS on 1 vehicle · KK1T TRITON built 2021, last 2026-10-12");
-    expect(ranked[1].evidence).toBe(
-      "seen in ASA CAPS on 2 vehicles · KK1T TRITON built 2015 (older build), last 2026-10-12",
-    );
-  });
-
-  it("keeps the existing order for vehicles without a production date", () => {
-    const ranked = catalogueRank(
-      [vehicle("MMBA0000000000001"), vehicle("MMBA0000000000002"), vehicle("MMBA0000000000003")],
-      [fitment("MMBA0000000000001", "COMMON"), fitment("MMBA0000000000002", "COMMON"), fitment("MMBA0000000000003", "RARE")],
-    );
-    expect(ranked.map((s) => [s.partNumber, s.buildGap])).toEqual([
-      ["COMMON", undefined],
-      ["RARE", undefined],
-    ]);
-    expect(ranked[0].evidence).toBe("seen in ASA CAPS on 2 vehicles · KK1T TRITON, last 2026-10-12");
+    expect(result[0].evidence).toBe("seen in ASA CAPS on 1 vehicle · KK1T TRITON built 2021, last 2026-10-01");
   });
 });

@@ -24,9 +24,12 @@ const SOURCE_LABEL: Record<SuggestionSource, string> = {
 
 function SuggestionRow({ suggestion }: { suggestion: PartSuggestion }) {
   const { copied, copy } = useCopyToClipboard();
+  const confirmed = suggestion.level === 'confirmed';
 
   return (
-    <div className="flex items-start gap-2 py-0.5 pl-10 pr-4 text-xs">
+    <div
+      className={`flex items-start gap-2 py-0.5 pl-10 pr-4 text-xs ${confirmed ? '' : 'opacity-60'}`}
+    >
       <button
         type="button"
         onClick={() => copy(suggestion.partNumber)}
@@ -43,6 +46,9 @@ function SuggestionRow({ suggestion }: { suggestion: PartSuggestion }) {
           </div>
         )}
         <div className="text-neutral-500 dark:text-neutral-400">
+          {confirmed && (
+            <span className="font-medium text-green-700 dark:text-green-400">confirmed · </span>
+          )}
           <span
             className={
               suggestion.source === 'quotes'
@@ -61,6 +67,11 @@ function SuggestionRow({ suggestion }: { suggestion: PartSuggestion }) {
             similar to “{suggestion.similarWording}”
           </div>
         )}
+        {suggestion.cautions.length > 0 && (
+          <div className="text-amber-700 dark:text-amber-400">
+            {suggestion.cautions.join(' · ')}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -72,12 +83,12 @@ function CopyAllButton({ text, count, total }: { text: string; count: number; to
   return (
     <div className="flex items-center justify-between gap-2 px-4 py-1.5 text-xs text-neutral-500 dark:text-neutral-400">
       <span>
-        Suggestions for {count} of {total} lines
+        Confirmed for {count} of {total} lines
       </span>
       <button
         type="button"
         onClick={() => copy(text)}
-        title="Top suggestion per line, one per line (blank where none), in PartsCheck order"
+        title="Top confirmed suggestion per line, one per line (blank where none), in PartsCheck order"
         className="rounded border border-border px-2 py-0.5 text-neutral-900 transition hover:border-accent hover:text-accent dark:border-border-dark dark:text-neutral-100"
       >
         {copied ? 'Copied' : 'Copy all in order'}
@@ -90,15 +101,18 @@ export function PartsChecklist({ parts, suggestionsStore }: PartsChecklistProps)
   const [checkedIds, setCheckedIds] = useState<ReadonlySet<string>>(new Set());
   const suggestionsStatus = useSyncExternalStore(suggestionsStore.subscribe, suggestionsStore.get);
 
-  const suggestionsById = new Map(
+  const linesById = new Map(
     suggestionsStatus.state === 'ready'
-      ? suggestionsStatus.lines.map((line) => [line.id, line.suggestions])
+      ? suggestionsStatus.lines.map((line) => [line.id, line])
       : [],
   );
   const perPart = parts.map((part) => ({
-    suggestions: suggestionsById.get(part.id) ?? NO_SUGGESTIONS,
+    suggestions: linesById.get(part.id)?.suggestions ?? NO_SUGGESTIONS,
+    wordingUnclear: linesById.get(part.id)?.wordingUnclear ?? false,
   }));
-  const linesWithSuggestions = perPart.filter((line) => line.suggestions.length > 0).length;
+  const confirmedLines = perPart.filter((line) =>
+    line.suggestions.some((s) => s.level === 'confirmed'),
+  ).length;
 
   function toggle(id: string) {
     setCheckedIds((prev) => {
@@ -120,10 +134,10 @@ export function PartsChecklist({ parts, suggestionsStore }: PartsChecklistProps)
         </p>
       ) : (
         <>
-          {linesWithSuggestions > 0 && (
+          {confirmedLines > 0 && (
             <CopyAllButton
               text={copyAllText(perPart)}
-              count={linesWithSuggestions}
+              count={confirmedLines}
               total={parts.length}
             />
           )}
@@ -146,9 +160,28 @@ export function PartsChecklist({ parts, suggestionsStore }: PartsChecklistProps)
                   {part.description}
                 </span>
               </label>
-              {perPart[i].suggestions.map((suggestion) => (
-                <SuggestionRow key={suggestion.partNumber} suggestion={suggestion} />
-              ))}
+              {perPart[i].wordingUnclear && (
+                <p className="py-0.5 pl-10 pr-4 text-xs text-amber-700 dark:text-amber-400">
+                  wording unclear — side or position can't be read, no suggestions
+                </p>
+              )}
+              {perPart[i].suggestions
+                .filter((suggestion) => suggestion.level === 'confirmed')
+                .map((suggestion) => (
+                  <SuggestionRow key={suggestion.partNumber} suggestion={suggestion} />
+                ))}
+              {perPart[i].suggestions.some((suggestion) => suggestion.level === 'possible') && (
+                <>
+                  <p className="pl-10 pr-4 pt-0.5 text-[11px] uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+                    possible, check
+                  </p>
+                  {perPart[i].suggestions
+                    .filter((suggestion) => suggestion.level === 'possible')
+                    .map((suggestion) => (
+                      <SuggestionRow key={suggestion.partNumber} suggestion={suggestion} />
+                    ))}
+                </>
+              )}
             </div>
           ))}
         </>

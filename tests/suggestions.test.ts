@@ -4,254 +4,324 @@ import { IDBFactory } from "fake-indexeddb";
 import { AsaCapsDatabase } from "@/storage/asacapsDb";
 import { extractQuoteContext, extractQuoteRows } from "@/services/extractors/quoteRows";
 import { captureQuote, suggestForQuote } from "@/services/quoteCapture/captureQuote";
-import { copyAllText, suggestForLines } from "@/services/quoteCapture/suggestions";
-import { normaliseDescription, parseSide } from "@/services/quoteCapture/normalise";
+import { copyAllText, suggestForLines, type SuggestionVehicle } from "@/services/quoteCapture/suggestions";
+import type { PartFitment, Vehicle } from "@/types/asacaps";
 import type { QuoteMapping } from "@/types/quoteMapping";
 import { loadQuotePage } from "./partscheckFixtures";
+import { fitment, mapping, newVin, vehicle, ym } from "./suggestionHelpers";
 
-let seq = 0;
-function mapping(overrides: Partial<QuoteMapping> & { repairerDescription: string }): QuoteMapping {
-  seq += 1;
-  const quoteKey = overrides.quoteKey ?? `draft:${seq}`;
-  return {
-    id: `${quoteKey}::1`,
-    quoteKey,
-    rowNo: 1,
-    iteration: 0,
-    draftItemId: String(seq),
-    repairerNormalised: normaliseDescription(overrides.repairerDescription),
-    side: parseSide(overrides.repairerDescription),
-    partNumber: "5716A585",
-    eraDescription: "HANDLERR DOOR OUTSIDE",
-    noGenuinePart: false,
-    isAccessory: false,
-    sideConflict: false,
-    vin: `MMAJYKL10PH${String(seq).padStart(6, "0")}`,
-    make: "Mitsubishi",
-    model: "Triton",
-    firstSeen: "2026-10-01T00:00:00.000Z",
-    lastSeen: "2026-10-01T00:00:00.000Z",
-    ...overrides,
-  };
+const KK1T_2011: SuggestionVehicle = { vin: newVin(), model: "Triton", modelCode: "KK1T", buildMonth: ym(2011, 8) };
+
+function suggest(
+  query: SuggestionVehicle,
+  description: string,
+  mappings: QuoteMapping[],
+  catalogue: { vehicles?: Vehicle[]; fitments?: PartFitment[] } = {},
+) {
+  return suggestForLines(query, [{ id: "1", description }], mappings, {
+    catalogue: { vehicles: catalogue.vehicles ?? [], fitments: catalogue.fitments ?? [] },
+    limit: 5,
+  })[0];
 }
+const levels = (line: ReturnType<typeof suggest>) => line.suggestions.map((s) => [s.partNumber, s.level]);
 
-const TRITON = { vin: "MMAJYKL10PH999999", model: "Triton" };
-const line = (description: string) => ({ id: "1", description });
-const partsFor = (vehicle: typeof TRITON, description: string, mappings: QuoteMapping[]) =>
-  suggestForLines(vehicle, [line(description)], mappings)[0].suggestions.map((s) => s.partNumber);
+describe("reported bugs", () => {
+  it("a 2011 Outlander is never offered a part used only on a 2018 Outlander", () => {
+    const outlander2018 = mapping({ partNumber: "7450B111", model: "Outlander", vin: newVin("JMFXZGL3"), buildMonth: ym(2018, 3) });
+    const query = { vin: newVin("JMFXTGF7"), model: "Outlander", buildMonth: ym(2011, 5) };
+    // Same model name only: dropped.
+    expect(suggest(query, "BONNET", [outlander2018]).suggestions).toEqual([]);
+    // Different model codes in the catalogue: still nothing.
+    const vehicles = [vehicle(query.vin, { modelCode: "CW5W" }), vehicle(outlander2018.vin!, { modelCode: "ZJ1W" })];
+    expect(suggest(query, "BONNET", [outlander2018], { vehicles }).suggestions).toEqual([]);
+  });
 
-describe("suggestForLines — wording", () => {
-  it("suggests a part used for the same wording, with evidence", () => {
-    const [result] = suggestForLines(
-      TRITON,
-      [line("L/H REAR DOOR OUTER HANDLE")],
-      [mapping({ repairerDescription: "L/H REAR DOOR OUTER HANDLE", lastSeen: "2026-10-12T05:00:00.000Z" })],
-    );
-    expect(result.side).toBe("LH");
-    expect(result.suggestions).toEqual([
-      expect.objectContaining({
-        partNumber: "5716A585",
-        tier: "vinPattern",
-        wordingScore: 1,
-        similarWording: undefined,
-        evidence: "used on 1 vehicle with this VIN pattern · Triton, last 2026-10-12",
-      }),
+  it("an R/F shock absorber line is never offered the R/R shock", () => {
+    const rearShock = mapping({
+      repairerDescription: "R/R SHOCK ABSORBER",
+      partNumber: "4162A429",
+      eraDescription: "SHOCK ABSORBERRR SUSP",
+      vin: KK1T_2011.vin,
+    });
+    expect(suggest(KK1T_2011, "R/F SHOCK ABSORBER", [rearShock]).suggestions).toEqual([]);
+  });
+
+  it("an R/F line matches an earlier R/F or RH FRONT line", () => {
+    for (const earlier of ["R/F SHOCK ABSORBER", "RH FRONT SHOCK ABSORBER", "SHOCK ABSORBER R/H/F"]) {
+      const frontShock = mapping({
+        repairerDescription: earlier,
+        partNumber: "4060A123",
+        eraDescription: "SHOCK ABSORBERFR SUSP",
+        modelCode: "KK1T",
+        buildMonth: ym(2011, 2),
+      });
+      expect(levels(suggest(KK1T_2011, "R/F SHOCK ABSORBER", [frontShock])), earlier).toEqual([["4060A123", "confirmed"]]);
+    }
+  });
+
+  it("a part used on 2010 and 2013 KK1T cars is confirmed for a 2011 KK1T", () => {
+    const stored = [
+      mapping({ partNumber: "5900A001", modelCode: "KK1T", buildMonth: ym(2010, 1) }),
+      mapping({ partNumber: "5900A001", modelCode: "KK1T", buildMonth: ym(2013, 6) }),
+    ];
+    const [s] = suggest(KK1T_2011, "BONNET", stored).suggestions;
+    expect(s).toMatchObject({ partNumber: "5900A001", level: "confirmed", cautions: [], tier: "modelCode" });
+    expect(s.evidence).toBe("used on 2 vehicles · KK1T Triton built 2010–2013, last 2026-10-01");
+  });
+});
+
+describe("vehicle evidence", () => {
+  it("same VIN is confirmed without date evidence", () => {
+    const stored = [mapping({ vin: KK1T_2011.vin, buildMonth: undefined })];
+    const [s] = suggest(KK1T_2011, "BONNET", stored).suggestions;
+    expect(s).toMatchObject({ level: "confirmed", tier: "vin", evidence: "used on this vehicle (1 time), last 2026-10-01" });
+  });
+
+  it("same model code built within 12 months is confirmed", () => {
+    const stored = [mapping({ modelCode: "KK1T", buildMonth: ym(2012, 7) })];
+    expect(levels(suggest(KK1T_2011, "BONNET", stored))).toEqual([["5900A001", "confirmed"]]);
+  });
+
+  it("same model code without date evidence is only possible", () => {
+    const stored = [mapping({ modelCode: "KK1T", buildMonth: ym(2016, 1) })];
+    const [s] = suggest(KK1T_2011, "BONNET", stored).suggestions;
+    expect(s).toMatchObject({ level: "possible", cautions: ["no vehicle built within 12 months"] });
+    expect(s.evidence).toContain("(newer build)");
+    const unknownBuild = suggest({ ...KK1T_2011, buildMonth: undefined }, "BONNET", stored).suggestions[0];
+    expect(unknownBuild.cautions).toEqual(["build date unknown"]);
+  });
+
+  it("infers the model code from the VIN pattern only when the catalogue agrees on one", () => {
+    const query = { vin: newVin("MMAGUKS1"), model: "Pajero Sport", buildMonth: ym(2022, 6) };
+    const used = mapping({ vin: newVin("MMAGUKS1"), model: "Pajero Sport", buildMonth: ym(2022, 1) });
+    const agreeing = [vehicle(newVin("MMAGUKS1"), { modelCode: "QF1W" }), vehicle(newVin("MMAGUKS1"), { modelCode: "QF1W" })];
+    expect(levels(suggest(query, "BONNET", [used], { vehicles: agreeing }))).toEqual([["5900A001", "confirmed"]]);
+
+    const conflicting = [...agreeing, vehicle(newVin("MMAGUKS1"), { modelCode: "QF2W" })];
+    expect(suggest(query, "BONNET", [used], { vehicles: conflicting }).suggestions).toEqual([]);
+    // VIN pattern alone, no model codes known: dropped.
+    expect(suggest(query, "BONNET", [used]).suggestions).toEqual([]);
+  });
+
+  it("looks up a past vehicle's model code by VIN at suggestion time", () => {
+    const pastVin = newVin("MMBXXXX1");
+    const used = mapping({ vin: pastVin, modelCode: undefined, buildMonth: ym(2011, 1) });
+    expect(levels(suggest(KK1T_2011, "BONNET", [used], { vehicles: [vehicle(pastVin, { modelCode: "KK1T" })] }))).toEqual([
+      ["5900A001", "confirmed"],
+    ]);
+  });
+});
+
+describe("wording", () => {
+  it("different wordings that normalise the same are exact", () => {
+    const stored = [mapping({ repairerDescription: "LHR DR OUTSIDE HDL", partNumber: "5716A585", eraDescription: "HANDLERR DOOR OUTSIDE", modelCode: "KK1T", buildMonth: ym(2011, 1) })];
+    expect(levels(suggest(KK1T_2011, "L/H REAR DOOR OUTER HANDLE", stored))).toEqual([["5716A585", "confirmed"]]);
+  });
+
+  it("a wording linked to the same part by another vehicle counts as exact", () => {
+    const evidence = mapping({ repairerDescription: "L/H REAR DOOR OUTER HANDLE", partNumber: "5716A585", modelCode: "KK1T", buildMonth: ym(2011, 3) });
+    const otherWording = mapping({ repairerDescription: "LH RR DOOR EXT HANDLE", partNumber: "5716A585", modelCode: "KL1T", vin: newVin("MMAXXXX2") });
+    const line = suggest(KK1T_2011, "LH RR DOOR EXT HANDLE", [evidence, otherWording]);
+    expect(levels(line)).toEqual([["5716A585", "confirmed"]]);
+  });
+
+  it("similar wording is only possible, and says what it was similar to", () => {
+    const stored = [mapping({ repairerDescription: "L/H REAR DOOR OUTER HANDLE", partNumber: "5716A585", modelCode: "KK1T", buildMonth: ym(2011, 1) })];
+    const [s] = suggest(KK1T_2011, "L/H REAR DOOR OUTER HANDLE ASSY", stored).suggestions;
+    expect(s).toMatchObject({ level: "possible", cautions: ["similar wording"], similarWording: "L/H REAR DOOR OUTER HANDLE" });
+  });
+
+  it("never treats different positions as similar", () => {
+    const stored = [mapping({ repairerDescription: "L/H/F GUARD LINER REAR", eraDescription: "SHIELDFR WHEELHOUSE SPLASHRR", modelCode: "KK1T", buildMonth: ym(2011, 1) })];
+    expect(suggest(KK1T_2011, "L/H/F GUARD LINER FRONT", stored).suggestions).toEqual([]);
+  });
+
+  it("an unclear line gets nothing and is flagged", () => {
+    const stored = [mapping({ repairerDescription: "R/LOWER CONTROL ARM", vin: KK1T_2011.vin })];
+    expect(suggest(KK1T_2011, "R/LOWER CONTROL ARM", stored)).toMatchObject({ wordingUnclear: true, suggestions: [] });
+  });
+
+  it("an unclear past wording is never matched", () => {
+    const stored = [mapping({ repairerDescription: "R LOWER CONTROL ARM", vin: KK1T_2011.vin })];
+    expect(suggest(KK1T_2011, "LOWER CONTROL ARM", stored).suggestions).toEqual([]);
+  });
+});
+
+describe("side", () => {
+  const guard = (extra: Partial<QuoteMapping> = {}) =>
+    mapping({ repairerDescription: "L/H/F GUARD", partNumber: "5220AX75", eraDescription: "FENDERFR LH", vin: KK1T_2011.vin, ...extra });
+
+  it("never offers a handed part for the other side, or for a line with no side", () => {
+    expect(suggest(KK1T_2011, "R/H/F GUARD", [guard()]).suggestions).toEqual([]);
+    expect(suggest(KK1T_2011, "FRONT GUARD", [guard()]).suggestions).toEqual([]);
+    expect(levels(suggest(KK1T_2011, "L/H/F GUARD", [guard()]))).toEqual([["5220AX75", "confirmed"]]);
+  });
+
+  it("only ERA saying 'no side' (it may be truncated) makes the other side possible, not confirmed", () => {
+    const hubBearing = mapping({ repairerDescription: "L/H/F HUB BEARING", partNumber: "MR992372", eraDescription: "BEARINGFR WHEEL HUB", vin: KK1T_2011.vin });
+    const [s] = suggest(KK1T_2011, "R/H/F HUB BEARING", [hubBearing]).suggestions;
+    expect(s).toMatchObject({ level: "possible", cautions: ["side not confirmed"] });
+  });
+
+  it("a part ASA lists without a side, or seen on both sides, is confirmed for either", () => {
+    const hubBearing = mapping({ repairerDescription: "L/H/F HUB BEARING", partNumber: "MR992372", eraDescription: "BEARINGFR WHEEL HUB", vin: KK1T_2011.vin });
+    const asa = { fitments: [fitment(newVin(), "MR992372", "BEARING,FR WHEEL HUB")] };
+    expect(levels(suggest(KK1T_2011, "R/H/F HUB BEARING", [hubBearing], asa))).toEqual([["MR992372", "confirmed"]]);
+
+    const rhLine = mapping({ repairerDescription: "R/H/F HUB BEARING", partNumber: "MR992372", eraDescription: "BEARINGFR WHEEL HUB", vin: newVin() });
+    expect(levels(suggest(KK1T_2011, "R/H/F HUB BEARING", [hubBearing, rhLine]))[0]).toEqual(["MR992372", "confirmed"]);
+  });
+
+  it("a line asking for both sides is only possible", () => {
+    const either = mapping({ repairerDescription: "FRONT WIPER BLADE", eraDescription: "BLADE,WINDSHIELD WIPER", vin: KK1T_2011.vin });
+    const asa = { fitments: [fitment(newVin(), "5900A001", "BLADE,WINDSHIELD WIPER")] };
+    const [s] = suggest(KK1T_2011, "L/H & R/H FRONT WIPER BLADE", [either], asa).suggestions;
+    expect(s.level).toBe("possible");
+  });
+});
+
+describe("conflicts", () => {
+  it("two different part numbers confirmed for one line are both downgraded", () => {
+    const stored = [
+      mapping({ partNumber: "5900A001", vin: KK1T_2011.vin }),
+      mapping({ partNumber: "5900A099", modelCode: "KK1T", buildMonth: ym(2011, 5) }),
+    ];
+    const line = suggest(KK1T_2011, "BONNET", stored);
+    expect(levels(line)).toEqual([
+      ["5900A001", "possible"],
+      ["5900A099", "possible"],
+    ]);
+    expect(copyAllText([line])).toBe("");
+  });
+});
+
+describe("never suggested", () => {
+  it("NA rows, ERA ordering slips and the open quote itself", () => {
+    const stored = [
+      mapping({ partNumber: "NA", noGenuinePart: true, vin: KK1T_2011.vin }),
+      mapping({ partNumber: "5900A002", sideConflict: true, vin: KK1T_2011.vin }),
+      mapping({ partNumber: "5900A003", quoteKey: "draft:open", vin: KK1T_2011.vin }),
+    ];
+    const line = suggestForLines(KK1T_2011, [{ id: "1", description: "BONNET" }], stored, { excludeQuoteKey: "draft:open" })[0];
+    expect(line.suggestions).toEqual([]);
+  });
+});
+
+describe("ASA catalogue suggestions follow the same rules", () => {
+  it("confirmed by ASA description on the same VIN", () => {
+    const asa = { fitments: [fitment(KK1T_2011.vin!, "5716A585", "HANDLE,RR DOOR OUTSIDE,LH")] };
+    const [s] = suggest(KK1T_2011, "L/H REAR DOOR OUTER HANDLE", [], asa).suggestions;
+    expect(s).toMatchObject({ partNumber: "5716A585", source: "catalogue", level: "confirmed", evidence: "seen in ASA CAPS for this vehicle, last 2026-10-01" });
+  });
+
+  it("confirmed by same model code with a near build, never by model name alone", () => {
+    const near = newVin("MMBXXXX3");
+    const sameNameOnly = newVin("MMBXXXX4");
+    const vehicles = [
+      vehicle(near, { modelCode: "KK1T", productionFrom: "2011.3.1" }),
+      vehicle(sameNameOnly, { productionFrom: "2011.3.1" }),
+    ];
+    const asa = (vin: string) => ({ vehicles, fitments: [fitment(vin, "5900A001", "HOOD")] });
+    expect(levels(suggest(KK1T_2011, "HOOD", [], asa(near)))).toEqual([["5900A001", "confirmed"]]);
+    expect(suggest(KK1T_2011, "HOOD", [], asa(sameNameOnly)).suggestions).toEqual([]);
+  });
+
+  it("the side must agree with the ASA description", () => {
+    const asa = { fitments: [fitment(KK1T_2011.vin!, "5716A585", "HANDLE,RR DOOR OUTSIDE,LH")] };
+    expect(suggest(KK1T_2011, "R/H REAR DOOR OUTER HANDLE", [], asa).suggestions).toEqual([]);
+  });
+
+  it("a confirmed catalogue match beats a possible quote match for the same part", () => {
+    const quote = mapping({ modelCode: "KK1T", buildMonth: ym(2018, 1) }); // too far: possible
+    const asa = { fitments: [fitment(KK1T_2011.vin!, "5900A001", "BONNET")] };
+    const [s] = suggest(KK1T_2011, "BONNET", [quote], asa).suggestions;
+    expect(s).toMatchObject({ source: "catalogue", level: "confirmed" });
+  });
+});
+
+describe("ordering and copy all", () => {
+  it("a confirmed part comes before possible ones", () => {
+    const stored = [
+      mapping({ partNumber: "POSSIBLE", modelCode: "KK1T", buildMonth: ym(2019, 1) }),
+      mapping({ partNumber: "VIN", vin: KK1T_2011.vin }),
+    ];
+    expect(levels(suggest(KK1T_2011, "BONNET", stored))).toEqual([
+      ["VIN", "confirmed"],
+      ["POSSIBLE", "possible"],
     ]);
   });
 
-  it("matches different wordings that normalise the same", () => {
-    const stored = [mapping({ repairerDescription: "LHR DR OUTSIDE HDL" })];
-    expect(partsFor(TRITON, "L/H REAR DOOR OUTER HANDLE", stored)).toEqual(["5716A585"]);
-  });
-
-  it("accepts close wording and says what it was similar to", () => {
-    const stored = [mapping({ repairerDescription: "L/H REAR DOOR OUTER HANDLE" })];
-    const [s] = suggestForLines(TRITON, [line("L/H REAR DOOR OUTER HANDLE ASSY")], stored)[0].suggestions;
-    expect(s.wordingScore).toBe(0.8);
-    expect(s.similarWording).toBe("L/H REAR DOOR OUTER HANDLE");
-  });
-
-  it("never treats different positions as similar wording", () => {
-    const rearLiner = mapping({ repairerDescription: "L/H/F GUARD LINER REAR", eraDescription: "SHIELDFR WHEELHOUSE SPLASHRR" });
-    expect(partsFor(TRITON, "L/H/F GUARD LINER FRONT", [rearLiner])).toEqual([]);
-    const outerHandle = mapping({ repairerDescription: "L/H REAR DOOR OUTER HANDLE" });
-    expect(partsFor(TRITON, "L/H REAR DOOR HANDLE", [outerHandle])).toEqual([]);
-  });
-
-  it("doesn't suggest a guard for a guard liner", () => {
-    const stored = [mapping({ repairerDescription: "L/H/F GUARD", partNumber: "5220AX75", eraDescription: "FENDERFR LH" })];
-    expect(partsFor(TRITON, "L/H/F GUARD LINER", stored)).toEqual([]);
-  });
-});
-
-describe("suggestForLines — side", () => {
-  const handed = mapping({ repairerDescription: "L/H/F GUARD", partNumber: "5220AX75", eraDescription: "FENDERFR LH" });
-  const unhanded = mapping({
-    repairerDescription: "L/H/F HUB BEARING",
-    partNumber: "MR992372",
-    eraDescription: "BEARINGFR WHEEL HUB",
-  });
-
-  it("never suggests a handed part for the other side", () => {
-    expect(partsFor(TRITON, "R/H/F GUARD", [handed])).toEqual([]);
-    expect(partsFor(TRITON, "L/H/F GUARD", [handed])).toEqual(["5220AX75"]);
-  });
-
-  it("doesn't guess a hand when the line names no side", () => {
-    expect(partsFor(TRITON, "FRONT GUARD", [handed])).toEqual([]);
-  });
-
-  it("offers either hand when the line names both sides", () => {
-    expect(partsFor(TRITON, "L/H & R/H FRONT GUARD", [handed])).toEqual(["5220AX75"]);
-  });
-
-  it("suggests an unhanded part for either side, whatever the repairer wrote", () => {
-    expect(partsFor(TRITON, "R/H/F HUB BEARING", [unhanded])).toEqual(["MR992372"]);
-    expect(partsFor(TRITON, "FRONT HUB BEARING", [unhanded])).toEqual(["MR992372"]);
-  });
-
-  it("falls back to the repairer's side when there's no ERA description", () => {
-    const typed = mapping({ repairerDescription: "L/H/F GUARD", eraDescription: undefined });
-    expect(partsFor(TRITON, "R/H/F GUARD", [typed])).toEqual([]);
-  });
-});
-
-describe("suggestForLines — what's never suggested", () => {
-  it("skips NA rows, likely ERA ordering slips, and the quote itself", () => {
+  it("among possible parts, same VIN before model code", () => {
     const stored = [
-      mapping({ repairerDescription: "L/H/F GUARD", partNumber: "NA", noGenuinePart: true }),
-      mapping({ repairerDescription: "L/H/F GUARD", partNumber: "5220AX76", sideConflict: true }),
-      mapping({ repairerDescription: "L/H/F GUARD", partNumber: "5220AX77", quoteKey: "draft:open" }),
+      mapping({ partNumber: "CODE", modelCode: "KK1T", buildMonth: ym(2011, 6) }),
+      mapping({ partNumber: "VIN", vin: KK1T_2011.vin }),
     ];
-    expect(
-      suggestForLines(TRITON, [line("L/H/F GUARD")], stored, { excludeQuoteKey: "draft:open" })[0].suggestions,
-    ).toEqual([]);
-  });
-
-  it("skips other models", () => {
-    const stored = [mapping({ repairerDescription: "BONNET", vin: "MMAGUKS10NH000001", model: "Pajero Sport" })];
-    expect(partsFor(TRITON, "BONNET", stored)).toEqual([]);
-  });
-});
-
-describe("suggestForLines — ranking", () => {
-  it("ranks exact VIN > model code > VIN pattern > model", () => {
-    const vehicle = { ...TRITON, modelCode: "KK1T" };
-    const stored = [
-      mapping({ repairerDescription: "BONNET", partNumber: "MODEL", vin: "MMBXXXXXXXX000001" }),
-      mapping({ repairerDescription: "BONNET", partNumber: "PATTERN" }),
-      mapping({ repairerDescription: "BONNET", partNumber: "CODE", vin: "MMBXXXXXXXX000002", modelCode: "KK1T" }),
-      mapping({ repairerDescription: "BONNET", partNumber: "VIN", vin: TRITON.vin }),
-    ];
-    const ranked = suggestForLines(vehicle, [line("BONNET")], stored, { limit: 4 })[0].suggestions;
-    expect(ranked.map((s) => [s.partNumber, s.tier])).toEqual([
+    expect(suggest(KK1T_2011, "BONNET", stored).suggestions.map((s) => [s.partNumber, s.tier])).toEqual([
       ["VIN", "vin"],
       ["CODE", "modelCode"],
-      ["PATTERN", "vinPattern"],
-      ["MODEL", "model"],
     ]);
-    expect(ranked[0].evidence).toBe("used on this vehicle (1 time), last 2026-10-01");
-    expect(ranked[1].evidence).toBe("used on 1 vehicle · KK1T Triton, last 2026-10-01");
   });
 
-  it("counts distinct vehicles, prefers the more-used part, and caps at 3", () => {
+  it("copy all uses confirmed suggestions only, blank otherwise", () => {
     const stored = [
-      mapping({ repairerDescription: "BONNET", partNumber: "A", vin: "MMBXXXXXXXX000001" }),
-      mapping({ repairerDescription: "BONNET", partNumber: "B", vin: "MMBXXXXXXXX000002" }),
-      mapping({ repairerDescription: "BONNET", partNumber: "B", vin: "MMBXXXXXXXX000003", lastSeen: "2026-10-20T00:00:00.000Z" }),
-      mapping({ repairerDescription: "BONNET", partNumber: "C", vin: "MMBXXXXXXXX000004" }),
-      mapping({ repairerDescription: "BONNET", partNumber: "D", vin: "MMBXXXXXXXX000005" }),
+      mapping({ repairerDescription: "BONNET", partNumber: "5900A001", vin: KK1T_2011.vin }),
+      mapping({ repairerDescription: "GRILLE", partNumber: "7450A001", modelCode: "KK1T", buildMonth: ym(2019, 1) }),
     ];
-    const ranked = suggestForLines(TRITON, [line("BONNET")], stored)[0].suggestions;
-    expect(ranked).toHaveLength(3);
-    expect(ranked[0]).toMatchObject({
-      partNumber: "B",
-      vehicleCount: 2,
-      evidence: "used on 2 vehicles · Triton, last 2026-10-20",
-    });
+    const lines = suggestForLines(KK1T_2011, [
+      { id: "1", description: "BONNET" },
+      { id: "2", description: "GRILLE" },
+      { id: "3", description: "TOW BAR" },
+    ], stored);
+    expect(lines[1].suggestions[0].level).toBe("possible");
+    expect(copyAllText(lines)).toBe("5900A001\n\n");
   });
 });
 
-describe("copyAllText", () => {
-  it("puts the top suggestion per line in order, blank where there's none", () => {
-    const stored = [
-      mapping({ repairerDescription: "BONNET", partNumber: "5900A" }),
-      mapping({ repairerDescription: "GRILLE", partNumber: "7450A" }),
-    ];
-    const lines = suggestForLines(TRITON, [line("BONNET"), line("TOW BAR"), line("GRILLE")], stored);
-    expect(copyAllText(lines)).toBe("5900A\n\n7450A");
-  });
-});
-
-describe("suggestForQuote — from captured quotes", () => {
+describe("suggestForQuote — from the captured real quote", () => {
   beforeEach(async () => {
     await AsaCapsDatabase.resetForTests();
     vi.stubGlobal("indexedDB", new IDBFactory());
   });
 
-  it("suggests from a captured Pajero Sport quote for the next one", async () => {
+  async function captureAndCatalogue() {
     const filled = loadQuotePage("quote-filled");
+    // The captured Pajero Sport is in the ASA catalogue as QF1W.
+    await AsaCapsDatabase.putVehicle(vehicle("MMAGUKS10NH000001", { model: "PAJERO SPORT", modelCode: "QF1W" }));
     await captureQuote(extractQuoteContext(filled)!, extractQuoteRows(filled), "2026-10-20T03:30:00.000Z");
+  }
 
-    // A new quote on another Pajero Sport of the same series, mirrored to the right side.
+  it("confirms the same wording for another QF1W built in the same year", async () => {
+    await captureAndCatalogue();
+    const lines = extractQuoteRows(loadQuotePage("quote-empty")).map((r) => ({ id: r.draftItemId, description: r.repairerDescription }));
+    const result = await suggestForQuote({ vin: "MMAGUKS10NH000999", model: "Pajero Sport", mthYr: "3/2022" }, lines, "draft:new");
+    const top = Object.fromEntries(result.map((l) => [l.description, l.suggestions[0] && [l.suggestions[0].partNumber, l.suggestions[0].level]]));
+    expect(top["L/H/F GUARD"]).toEqual(["5220AX75", "confirmed"]);
+    expect(top["L/H/F STEERING KNUCKLE"]).toEqual(["3870A180", "confirmed"]);
+    expect(top["L/H/F HUB NUT"]).toBeUndefined(); // NA
+    expect(result.find((l) => l.description === "L/H/F GUARD")!.suggestions[0].evidence).toBe(
+      "used on 1 vehicle · QF1W Pajero Sport built 2022, last 2026-10-20",
+    );
+  });
+
+  it("mirrored to the right side: handed parts dropped, ERA-unsided parts only possible", async () => {
+    await captureAndCatalogue();
     const lines = extractQuoteRows(loadQuotePage("quote-empty")).map((r) => ({
       id: r.draftItemId,
       description: r.repairerDescription.replace(/L\/H/g, "R/H"),
     }));
-    const result = await suggestForQuote({ vin: "MMAGUKS10NH000999", model: "Pajero Sport" }, lines, "draft:new");
-    const top = Object.fromEntries(result.map((l) => [l.description, l.suggestions[0]?.partNumber]));
-
-    // Handed parts aren't offered for the other side...
+    const result = await suggestForQuote({ vin: "MMAGUKS10NH000999", model: "Pajero Sport", mthYr: "3/2022" }, lines, "draft:new");
+    const top = Object.fromEntries(result.map((l) => [l.description, l.suggestions[0] && [l.suggestions[0].partNumber, l.suggestions[0].level]]));
     expect(top["R/H/F GUARD"]).toBeUndefined();
     expect(top["R/H/F STEERING KNUCKLE"]).toBeUndefined();
-    // ...unhanded ones are, and NA lines never are.
-    expect(top["R/H/F HUB BEARING"]).toBe("MR992372");
-    expect(top["R/H/F HUB ASSEMBLY"]).toBe("40202W030P");
-    expect(top["R/H/F LOWER BALL JOINT"]).toBe("4013A314");
-    expect(top["R/H/F DOOR WEATHER SHEILD"]).toBe("MZ330934");
-    expect(top["R/H/F HUB NUT"]).toBeUndefined();
-    expect(result.find((l) => l.description === "R/H/F HUB BEARING")!.suggestions[0].evidence).toBe(
-      "used on 1 vehicle with this VIN pattern · Pajero Sport built 2022, last 2026-10-20",
-    );
+    expect(top["R/H/F HUB BEARING"]).toEqual(["MR992372", "possible"]);
   });
 
-  it("suggests the same-side parts for the same wording", async () => {
+  it("offers nothing for a different model without the catalogue", async () => {
     const filled = loadQuotePage("quote-filled");
     await captureQuote(extractQuoteContext(filled)!, extractQuoteRows(filled), "2026-10-20T03:30:00.000Z");
-    const [guard, knuckle] = await suggestForQuote(
-      { vin: "MMAGUKS10NH000999", model: "Pajero Sport" },
-      [
-        { id: "a", description: "LEFT FRONT FENDER" },
-        { id: "b", description: "L/H/F STEERING KNUCKLE" },
-      ],
-    );
-    expect(guard.suggestions[0].partNumber).toBe("5220AX75");
-    expect(knuckle.suggestions[0].partNumber).toBe("3870A180");
-  });
-
-  it("uses the ASA CAPS catalogue's model code for the open vehicle", async () => {
-    const filled = loadQuotePage("quote-filled");
-    await AsaCapsDatabase.putVehicle({
-      id: "MMAGUKS10NH000001",
-      vin: "MMAGUKS10NH000001",
-      modelCode: "QF1W",
-      rawText: "",
-      firstSeen: "2026-10-20T00:00:00.000Z",
-      lastSeen: "2026-10-20T00:00:00.000Z",
-    });
-    await captureQuote(extractQuoteContext(filled)!, extractQuoteRows(filled), "2026-10-20T03:30:00.000Z");
-    await AsaCapsDatabase.putVehicle({
-      id: "MMBOTHERVIN000002",
-      vin: "MMBOTHERVIN000002",
-      modelCode: "QF1W",
-      rawText: "",
-      firstSeen: "2026-10-20T00:00:00.000Z",
-      lastSeen: "2026-10-20T00:00:00.000Z",
-    });
-
-    const [hub] = await suggestForQuote({ vin: "MMBOTHERVIN000002", model: "Pajero Sport" }, [
-      { id: "a", description: "R/H/F HUB BEARING" },
+    const [guard] = await suggestForQuote({ vin: "MMAGUKS10NH000999", model: "Pajero Sport", mthYr: "3/2022" }, [
+      { id: "a", description: "L/H/F GUARD" },
     ]);
-    expect(hub.suggestions[0]).toMatchObject({ partNumber: "MR992372", tier: "modelCode" });
+    expect(guard.suggestions).toEqual([]);
   });
 });

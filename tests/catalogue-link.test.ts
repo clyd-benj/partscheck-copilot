@@ -135,22 +135,21 @@ describe("ASA catalogue as a suggestion source", () => {
     expect(result.suggestions).toEqual([]);
   });
 
-  it("ranks same VIN, then model code, then model", () => {
+  it("offers same VIN (confirmed) and same model code (possible without a build date), never model name alone", () => {
     const fitments = [
       asaFitment("MMBXXXXXXXX000003", "MODEL", "BONNET"),
       asaFitment("MMAJYKL10PH000002", "CODE", "BONNET"),
       asaFitment(TRITON_VIN, "VIN", "BONNET"),
     ];
     const [result] = suggestForLines(query, [line("BONNET")], [], { catalogue: { fitments, vehicles } });
-    expect(result.suggestions.map((s) => [s.partNumber, s.tier])).toEqual([
-      ["VIN", "vin"],
-      ["CODE", "modelCode"],
-      ["MODEL", "model"],
+    expect(result.suggestions.map((s) => [s.partNumber, s.tier, s.level])).toEqual([
+      ["VIN", "vin", "confirmed"],
+      ["CODE", "modelCode", "possible"],
     ]);
     expect(result.suggestions[1].evidence).toBe("seen in ASA CAPS on 1 vehicle · KK1T TRITON, last 2026-10-12");
   });
 
-  it("is only used when past quotes have nothing for the line", async () => {
+  it("downgrades two different part numbers confirmed for the same line", async () => {
     await resetDb();
     await captureFilledQuote();
     await AsaCapsDatabase.putFitment(asaFitment(QUOTE_VIN, "5220AX99", "FENDER,FR LH"));
@@ -160,8 +159,14 @@ describe("ASA catalogue as a suggestion source", () => {
       { id: "a", description: "L/H/F GUARD" },
       { id: "b", description: "HOOD" },
     ]);
-    expect(guard.suggestions.map((s) => [s.partNumber, s.source])).toEqual([["5220AX75", "quotes"]]);
-    expect(bonnet.suggestions.map((s) => [s.partNumber, s.source])).toEqual([["5900A001", "catalogue"]]);
+    expect(guard.suggestions.map((s) => [s.partNumber, s.source, s.level])).toEqual([
+      ["5220AX75", "quotes", "possible"],
+      ["5220AX99", "catalogue", "possible"],
+    ]);
+    expect(guard.suggestions[0].cautions).toEqual(["another part number also matches"]);
+    expect(bonnet.suggestions.map((s) => [s.partNumber, s.source, s.level])).toEqual([
+      ["5900A001", "catalogue", "confirmed"],
+    ]);
   });
 
   it("ignores quote-only fitments (no ASA description) and NA", () => {
