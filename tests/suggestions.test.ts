@@ -50,12 +50,12 @@ describe("reported bugs", () => {
     for (const earlier of ["R/F SHOCK ABSORBER", "RH FRONT SHOCK ABSORBER", "SHOCK ABSORBER R/H/F"]) {
       const frontShock = mapping({
         repairerDescription: earlier,
-        partNumber: "4060A123",
+        partNumber: "4060A124", // even: RH by part-number parity, agreeing with the line
         eraDescription: "SHOCK ABSORBERFR SUSP",
         modelCode: "KK1T",
         buildMonth: ym(2011, 2),
       });
-      expect(levels(suggest(KK1T_2011, "R/F SHOCK ABSORBER", [frontShock])), earlier).toEqual([["4060A123", "confirmed"]]);
+      expect(levels(suggest(KK1T_2011, "R/F SHOCK ABSORBER", [frontShock])), earlier).toEqual([["4060A124", "confirmed"]]);
     }
   });
 
@@ -157,10 +157,9 @@ describe("side", () => {
     expect(levels(suggest(KK1T_2011, "L/H/F GUARD", [guard()]))).toEqual([["5220AX75", "confirmed"]]);
   });
 
-  it("only ERA saying 'no side' (it may be truncated) makes the other side possible, not confirmed", () => {
+  it("a part only ever captured on L/H lines is left-hand: nothing for an R/H line", () => {
     const hubBearing = mapping({ repairerDescription: "L/H/F HUB BEARING", partNumber: "MR992372", eraDescription: "BEARINGFR WHEEL HUB", vin: KK1T_2011.vin });
-    const [s] = suggest(KK1T_2011, "R/H/F HUB BEARING", [hubBearing]).suggestions;
-    expect(s).toMatchObject({ level: "possible", cautions: ["side not confirmed"] });
+    expect(suggest(KK1T_2011, "R/H/F HUB BEARING", [hubBearing]).suggestions).toEqual([]);
   });
 
   it("a part ASA lists without a side, or seen on both sides, is confirmed for either", () => {
@@ -296,14 +295,15 @@ describe("suggestForQuote — from the captured real quote", () => {
     const result = await suggestForQuote({ vin: "MMAGUKS10NH000999", model: "Pajero Sport", mthYr: "3/2022" }, lines, "draft:new");
     const top = Object.fromEntries(result.map((l) => [l.description, l.suggestions[0] && [l.suggestions[0].partNumber, l.suggestions[0].level]]));
     expect(top["L/H/F GUARD"]).toEqual(["5220AX75", "confirmed"]);
-    expect(top["L/H/F STEERING KNUCKLE"]).toEqual(["3870A180", "confirmed"]);
+    // ERA says KNUCKLE,LH but 3870A180 is even: parity disagrees, so only possible.
+    expect(top["L/H/F STEERING KNUCKLE"]).toEqual(["3870A180", "possible"]);
     expect(top["L/H/F HUB NUT"]).toBeUndefined(); // NA
     expect(result.find((l) => l.description === "L/H/F GUARD")!.suggestions[0].evidence).toBe(
       "used on 1 vehicle · QF1W Pajero Sport built 2022, last 2026-10-20",
     );
   });
 
-  it("mirrored to the right side: handed parts dropped, ERA-unsided parts only possible", async () => {
+  it("mirrored to the right side: nothing, since every captured part is left-hand", async () => {
     await captureAndCatalogue();
     const lines = extractQuoteRows(loadQuotePage("quote-empty")).map((r) => ({
       id: r.draftItemId,
@@ -313,7 +313,8 @@ describe("suggestForQuote — from the captured real quote", () => {
     const top = Object.fromEntries(result.map((l) => [l.description, l.suggestions[0] && [l.suggestions[0].partNumber, l.suggestions[0].level]]));
     expect(top["R/H/F GUARD"]).toBeUndefined();
     expect(top["R/H/F STEERING KNUCKLE"]).toBeUndefined();
-    expect(top["R/H/F HUB BEARING"]).toEqual(["MR992372", "possible"]);
+    expect(top["R/H/F HUB BEARING"]).toBeUndefined();
+    expect(result.every((l) => l.suggestions.length === 0)).toBe(true);
   });
 
   it("offers nothing for a different model without the catalogue", async () => {

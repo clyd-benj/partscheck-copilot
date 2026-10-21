@@ -1,5 +1,6 @@
 import { buildYear, parseAsaProductionDate, parsePartsCheckMthYr } from './buildDate';
-import { parseDescription, parseEraSide, parseSide } from './normalise';
+import { parseDescription } from './normalise';
+import { resolvePartSides, type PartSide, type PartSideEvidence } from './partSide';
 import { POSITION_TOKENS } from './synonyms';
 import type { PartFitment, Vehicle } from '@/types/asacaps';
 import type { QuoteMapping, Side } from '@/types/quoteMapping';
@@ -15,17 +16,18 @@ import type { QuoteMapping, Side } from '@/types/quoteMapping';
  *  - wording: the line's normalised words equal those of a wording already
  *    linked to the part (a past repairer line answered by it, or its ASA
  *    description), with exactly the same position words;
- *  - side: the same side as that wording, or the part is known to fit
- *    either side (ASA lists it without a side, or it has answered both LH
- *    and RH lines), or ASA/ERA name the line's side for it;
+ *  - side: the part's own side (partSide.ts: ERA, repairer lines, ASA,
+ *    part-number parity) is the line's side, or the part fits either side;
+ *    a conflicting or unknown part side is never offered;
  *  - vehicle: used on this VIN; or on the same model code (ASA catalogue,
  *    or inferred from the 8-character VIN pattern when every catalogue VIN
  *    with that pattern has one model code) with build-date evidence — a
  *    vehicle built within 12 months of this one, or vehicles built both
  *    before and after it.
  * POSSIBLE — same VIN or model code, but only similar wording, no
- * build-date evidence, or a side that only ERA's (possibly truncated)
- * description suggests. Shown greyed, never copied by "copy all".
+ * build-date evidence, a side only part-number parity supports (or that
+ * parity contradicts), or a line asking for both sides. Shown greyed, never
+ * copied by "copy all".
  * If two different part numbers would both be confirmed for one line, they
  * contradict each other and both become possible.
  * Everything else is dropped: model-name-only or VIN-pattern-only matches,
@@ -147,23 +149,12 @@ interface LinkedWording {
   partNumber: string;
   text: string;
   words: Set<string>;
-  side: Side;
-}
-
-/** What's known about whether a part is handed. */
-interface Handedness {
-  /** ASA lists it without a side, or it has answered both LH and RH lines. */
-  eitherSide: boolean;
-  /** Sides named for it by ASA or ERA descriptions. */
-  namedSides: Set<Side>;
-  /** Only ERA descriptions (which PartsCheck truncates) say it has no side. */
-  eraSaysUnhanded: boolean;
 }
 
 interface WordingMatch {
   score: number;
-  /** The side fits fully (not only via ERA's possibly-truncated description). */
-  sideFull: boolean;
+  /** Set when the side only weakly fits (possible at most), with the reason. */
+  sideCaution?: string;
   text: string;
 }
 
@@ -192,10 +183,10 @@ function wordingScore(a: Set<string>, b: Set<string>): number {
 /** Exact-and-confirmable beats everything; then higher score; then a fully fitting side. */
 function betterWording(candidate: WordingMatch, previous: WordingMatch | undefined): boolean {
   if (!previous) return true;
-  const strong = (m: WordingMatch) => m.score === 1 && m.sideFull;
+  const strong = (m: WordingMatch) => m.score === 1 && !m.sideCaution;
   if (strong(candidate) !== strong(previous)) return strong(candidate);
   if (candidate.score !== previous.score) return candidate.score > previous.score;
-  return candidate.sideFull && !previous.sideFull;
+  return !candidate.sideCaution && !!previous.sideCaution;
 }
 
 /**
@@ -223,22 +214,19 @@ function modelCodeLookup(vehicles: Vehicle[]): (vin: string | undefined) => stri
 }
 
 /**
- * Whether a linked wording's side fits the line: 'full' (confirmable),
- * 'weak' (possible only) or null (never).
+ * Whether the part's side (see partSide.ts) fits the line's side: never for
+ * a conflicting or unknown side or the wrong hand; possible-only (with a
+ * caution) for a weakly known side or a line asking for both sides.
  */
-function sideFit(lineSide: Side, wordingSide: Side, hand: Handedness): 'full' | 'weak' | null {
-  const handed = lineSide === 'LH' || lineSide === 'RH';
-  // ASA/ERA name a different hand for this part: wrong part for this side.
-  if (handed && hand.namedSides.size > 0 && !hand.namedSides.has(lineSide)) return null;
+function sideFit(lineSide: Side, part: PartSide): { caution?: string } | null {
+  if (part.hand === 'CONFLICT' || part.hand === 'UNKNOWN') return null;
   if (lineSide === 'BOTH') {
     // One part number can't fully answer a line asking for both sides.
-    return wordingSide === 'BOTH' || hand.eitherSide ? 'weak' : null;
+    return { caution: 'line asks for both sides' };
   }
-  if (lineSide === wordingSide) return 'full';
-  if (hand.eitherSide) return 'full';
-  if (handed && hand.namedSides.has(lineSide)) return 'full';
-  if (hand.eraSaysUnhanded) return 'weak';
-  return null;
+  if (part.hand === 'NONE') return {};
+  if (lineSide !== part.hand) return null;
+  return part.weak ? { caution: part.weak } : {};
 }
 
 function day(iso: string): string {
@@ -332,7 +320,7 @@ function scoreSource(
   const dated = tier === 'vin' || hasBuildDateEvidence(vehicle.buildMonth, sameCode);
   const cautions: string[] = [];
   if (!exact) cautions.push('similar wording');
-  if (!wording.sideFull) cautions.push('side not confirmed');
+  if (wording.sideCaution) cautions.push(wording.sideCaution);
   if (!dated) {
     cautions.push(
       vehicle.buildMonth === undefined ? 'build date unknown' : 'no vehicle built within 12 months',
@@ -437,33 +425,30 @@ export function suggestForLines(
   const addWording = (partNumber: string, text: string) => {
     const parsed = parseDescription(text);
     if (parsed.unclear || parsed.words.length === 0) return;
-    wordings.push({ partNumber, text, words: new Set(parsed.words), side: parsed.side });
+    wordings.push({ partNumber, text, words: new Set(parsed.words) });
   };
   for (const m of usableMappings) addWording(m.partNumber, m.repairerDescription);
   for (const f of usableFitments) addWording(f.partNumber, f.description!);
 
-  const handedness = new Map<string, Handedness>();
-  const handOf = (partNumber: string): Handedness => {
-    const cached = handedness.get(partNumber);
-    if (cached) return cached;
-    const asaSides = usableFitments
-      .filter((f) => f.partNumber === partNumber)
-      .map((f) => parseSide(f.description!));
-    const eraSides = usableMappings
-      .filter((m) => m.partNumber === partNumber && m.eraDescription)
-      .map((m) => parseEraSide(m.eraDescription!));
-    const lineSides = new Set(
-      wordings.filter((w) => w.partNumber === partNumber).map((w) => w.side),
-    );
-    const hand: Handedness = {
-      eitherSide: asaSides.includes('NONE') || (lineSides.has('LH') && lineSides.has('RH')),
-      namedSides: new Set([...asaSides, ...eraSides].filter((s) => s === 'LH' || s === 'RH')),
-      eraSaysUnhanded:
-        asaSides.length === 0 && eraSides.length > 0 && eraSides.every((s) => s === 'NONE'),
-    };
-    handedness.set(partNumber, hand);
-    return hand;
+  // Which side each part fits, from every source (ERA, repairer lines, ASA,
+  // part-number parity).
+  const evidenceByPart = new Map<string, PartSideEvidence>();
+  const evidenceFor = (partNumber: string): PartSideEvidence => {
+    let evidence = evidenceByPart.get(partNumber);
+    if (!evidence) {
+      evidence = { eraDescriptions: [], lineSides: [], asaDescriptions: [] };
+      evidenceByPart.set(partNumber, evidence);
+    }
+    return evidence;
   };
+  for (const m of usableMappings) {
+    const evidence = evidenceFor(m.partNumber);
+    if (m.eraDescription) evidence.eraDescriptions.push(m.eraDescription);
+    const line = parseDescription(m.repairerDescription);
+    if (!line.unclear) evidence.lineSides.push(line.side);
+  }
+  for (const f of usableFitments) evidenceFor(f.partNumber).asaDescriptions.push(f.description!);
+  const partSides = resolvePartSides(evidenceByPart);
 
   return lines.map((line) => {
     const parsed = parseDescription(line.description);
@@ -475,9 +460,9 @@ export function suggestForLines(
     for (const wording of wordings) {
       const score = wordingScore(lineWords, wording.words);
       if (score < SIMILAR_THRESHOLD) continue;
-      const fit = sideFit(parsed.side, wording.side, handOf(wording.partNumber));
+      const fit = sideFit(parsed.side, partSides.get(wording.partNumber)!);
       if (!fit) continue;
-      const match = { score, sideFull: fit === 'full', text: wording.text };
+      const match = { score, sideCaution: fit.caution, text: wording.text };
       if (betterWording(match, wordingByPart.get(wording.partNumber))) {
         wordingByPart.set(wording.partNumber, match);
       }
