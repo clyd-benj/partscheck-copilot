@@ -27,6 +27,7 @@ const GET_SETTINGS_MESSAGE_TYPE = 'GET_SETTINGS';
 const SET_CAPTURE_ENABLED_MESSAGE_TYPE = 'SET_CAPTURE_ENABLED';
 const SAVE_QUOTE_CAPTURE_MESSAGE_TYPE = 'SAVE_QUOTE_CAPTURE';
 const GET_QUOTE_SUGGESTIONS_MESSAGE_TYPE = 'GET_QUOTE_SUGGESTIONS';
+const ASA_VEHICLE_UPDATED_MESSAGE_TYPE = 'ASA_VEHICLE_UPDATED';
 
 interface GetCustomersMessage {
   type: typeof GET_CUSTOMERS_MESSAGE_TYPE;
@@ -81,6 +82,15 @@ interface GetQuoteSuggestionsMessage {
   excludeQuoteKey?: string;
 }
 
+/**
+ * Background → PartsCheck tabs: ASA CAPS just captured (or refreshed) this
+ * VIN's vehicle record, so an open quote for it can re-rank its suggestions.
+ */
+export interface AsaVehicleUpdatedMessage {
+  type: typeof ASA_VEHICLE_UPDATED_MESSAGE_TYPE;
+  vin: string;
+}
+
 export type RuntimeMessage =
   | GetCustomersMessage
   | AddCustomerMessage
@@ -92,7 +102,8 @@ export type RuntimeMessage =
   | GetSettingsMessage
   | SetCaptureEnabledMessage
   | SaveQuoteCaptureMessage
-  | GetQuoteSuggestionsMessage;
+  | GetQuoteSuggestionsMessage
+  | AsaVehicleUpdatedMessage;
 
 function hasType(message: unknown, type: string): boolean {
   return typeof message === 'object' && message !== null && (message as { type?: unknown }).type === type;
@@ -142,6 +153,17 @@ export function isGetQuoteSuggestionsMessage(
   message: unknown,
 ): message is GetQuoteSuggestionsMessage {
   return hasType(message, GET_QUOTE_SUGGESTIONS_MESSAGE_TYPE);
+}
+
+export function isAsaVehicleUpdatedMessage(message: unknown): message is AsaVehicleUpdatedMessage {
+  return (
+    hasType(message, ASA_VEHICLE_UPDATED_MESSAGE_TYPE) &&
+    typeof (message as { vin?: unknown }).vin === 'string'
+  );
+}
+
+export function asaVehicleUpdatedMessage(vin: string): AsaVehicleUpdatedMessage {
+  return { type: ASA_VEHICLE_UPDATED_MESSAGE_TYPE, vin };
 }
 
 // --- Customer database (content script ↔ background) ---

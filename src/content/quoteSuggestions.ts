@@ -1,5 +1,6 @@
 import { createValueStore, type ValueStore } from './valueStore';
 import { extractQuoteContext, extractQuoteRows } from '@/services/extractors/quoteRows';
+import { isAsaVehicleUpdatedMessage } from '@/services/messaging';
 import type {
   LineSuggestions,
   QuoteVehicle,
@@ -11,6 +12,8 @@ import type {
  * quote's lines that haven't been DMS-uploaded yet. Display only — the
  * sidebar offers copy buttons; nothing is written into PartsCheck.
  */
+
+const LOG_PREFIX = '[Parts Interpreter Toolkit]';
 
 export type QuoteSuggestionsStatus =
   { state: 'loading' } | { state: 'ready'; lines: LineSuggestions[] };
@@ -52,7 +55,32 @@ export async function loadQuoteSuggestions(
     );
     store.set({ state: 'ready', lines: suggested });
   } catch (error) {
-    console.error('[Parts Interpreter Toolkit]', 'quote suggestions failed', error);
+    console.error(LOG_PREFIX, 'quote suggestions failed', error);
     store.set({ state: 'ready', lines: [] });
   }
+}
+
+type MessageListener = (message: unknown) => void;
+
+/**
+ * Re-runs the suggestions when ASA CAPS captures the open quote's VIN, so
+ * same-trim ranking applies without reloading the page. Other VINs are
+ * ignored. `addListener` is injectable for tests; returns an unsubscribe.
+ */
+export function refreshSuggestionsOnAsaVehicle(
+  store: QuoteSuggestionsStore,
+  request: RequestQuoteSuggestions,
+  root: Document = document,
+  addListener: (listener: MessageListener) => () => void = (listener) => {
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
+  },
+): () => void {
+  return addListener((message) => {
+    if (!isAsaVehicleUpdatedMessage(message)) return;
+    const vin = extractQuoteContext(root)?.vin;
+    if (!vin || vin.toUpperCase() !== message.vin.toUpperCase()) return;
+    console.log(LOG_PREFIX, `ASA CAPS captured ${vin} — refreshing suggestions`);
+    void loadQuoteSuggestions(store, request, root);
+  });
 }

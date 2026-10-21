@@ -77,8 +77,9 @@ export async function captureQuote(
 /**
  * Background-side suggestions for a quote's unfilled lines: past quote
  * mappings first, then the ASA CAPS catalogue's fitments. The vehicle's
- * model code and build month come from the catalogue when the VIN has been
- * seen there; the build month falls back to the quote's Mth/Yr.
+ * model code, classification (trim) and build month come from the catalogue
+ * when the VIN has been seen there; the build month falls back to the
+ * quote's Mth/Yr.
  */
 export async function suggestForQuote(
   vehicle: QuoteVehicle,
@@ -91,6 +92,7 @@ export async function suggestForQuote(
     model: vehicle.model,
     modelCode: known?.modelCode,
     buildMonth: vehicleBuildMonth(known, vehicle.mthYr)?.month,
+    classification: known?.classification,
   };
   const [mappings, fitments, vehicles] = await Promise.all([
     AsaCapsDatabase.listQuoteMappings(),

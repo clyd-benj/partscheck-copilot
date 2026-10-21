@@ -601,7 +601,7 @@ npm run build      # tsc -b && vite build -> dist/
 npm run dev        # Vite watch mode with HMR; load dist/ as unpacked, refresh on changes
 npm run lint       # eslint . --max-warnings 0
 npm run typecheck  # tsc -b only
-npm test           # vitest run — 18 files, 203 tests, all currently passing
+npm test           # vitest run — 19 files, 215 tests, all currently passing
 npm run test:watch
 npm run format     # prettier --write .
 ```
@@ -882,3 +882,31 @@ suggestions. Rules now:
   "from ASA catalogue" suggestions.
 - Tests: `build-date.test.ts`, `build-date-ranking.test.ts`, plus capture/export cases in
   `quote-mappings.test.ts` and `catalogue-link.test.ts`.
+
+### 9.7 ASA CAPS classification (trim) in suggestion ranking
+
+- When the quoted VIN is in the ASA catalogue, `suggestForQuote` passes its `classification`
+  (e.g. `XTSHR8`) as `SuggestionVehicle.classification`. Each candidate's classification is
+  **looked up by VIN at suggestion time** from the catalogue's `vehicles` (quote mappings via
+  their VIN, catalogue fitments via their vehicle) — nothing is copied onto mappings or
+  fitments. `CatalogueData.vehicles` is therefore used by both sources.
+- Per suggested part, `sameTrimCount` = distinct winning-tier vehicles with the quoted trim
+  (case-insensitive). Sort order is now: tier → has same-trim vehicles → build gap (§9.6) →
+  wording → vehicle count → times used → recency. **Never a filter** (user: most shared parts
+  span several classifications). Unknown classification on either side ⇒ `sameTrimCount` 0
+  everywhere ⇒ exactly the previous order and evidence.
+- Evidence inserts ` (N same trim XTSHR8)` before the build range: `used on 3 vehicles · KK1T
+  Triton (2 same trim XTSHR8) built 2021–2022, last …`. Not shown for the same-VIN tier.
+- **Chassis code is deliberately not used** in ranking (user decision).
+- **Refresh without reload**: after an ASA CAPS clipboard capture that yields a VIN
+  (`handleClipboardCapture` in the background, which the page-watch path also goes through),
+  the background sends `ASA_VEHICLE_UPDATED { vin }` to every tab matching
+  `https://*.partscheck.com.au/*` (`chrome.tabs.query` — works with the existing host
+  permission, no `tabs` permission needed; send errors to tabs without the content script are
+  swallowed). On the PartsCheck page, `refreshSuggestionsOnAsaVehicle()` (quoteSuggestions.ts)
+  re-runs `loadQuoteSuggestions` when the VIN matches the open quote's (case-insensitive).
+  Verified end to end in Playwright Chromium: copying the vehicle breadcrumb on a (routed)
+  myasaweb.com page logged the refresh in the open PartsCheck tab.
+- Tests: `classification-ranking.test.ts` (same-trim ranking, tier precedence, never-filter,
+  evidence, catalogue source, unknown classification ⇒ unchanged order, suggestForQuote via the
+  DB, refresh listener).

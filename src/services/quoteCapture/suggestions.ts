@@ -15,8 +15,9 @@ import type { QuoteMapping, Side } from '@/types/quoteMapping';
  *     fitments copied in ASA CAPS whose ASA description matches the line's
  *     wording through the same synonym map.
  *
- * Within a vehicle tier, suggestions closest in build date to the quoted
- * vehicle rank first (a ranking factor, never a filter).
+ * Within a vehicle tier, suggestions used on the quoted vehicle's ASA CAPS
+ * classification (trim) rank first, then those closest in build date
+ * (ranking factors, never filters). Chassis code is not used.
  *
  * Either way a candidate must
  *  - match the wording (identical normalised words, or close enough — see
@@ -43,6 +44,8 @@ export interface SuggestionVehicle {
   modelCode?: string;
   /** Build month of the vehicle being quoted (see buildDate.ts), if known. */
   buildMonth?: number;
+  /** ASA CAPS classification (trim) of the quoted VIN, if it's in the catalogue. */
+  classification?: string;
 }
 
 /** The quoted vehicle as read from the PartsCheck page. */
@@ -76,6 +79,11 @@ export interface PartSuggestion {
    * part was used on (winning tier); undefined when either side has no date.
    */
   buildGap?: number;
+  /**
+   * Winning-tier vehicles with the quoted vehicle's ASA CAPS classification
+   * (trim); 0 when either side's classification is unknown.
+   */
+  sameTrimCount: number;
   /** Matching records across all tiers. */
   timesUsed: number;
   lastSeen: string;
@@ -90,7 +98,10 @@ export interface LineSuggestions {
   suggestions: PartSuggestion[];
 }
 
-/** The ASA CAPS catalogue, as a fallback source. */
+/**
+ * The ASA CAPS catalogue: a fallback source of fitments, and the vehicle
+ * records (classification by VIN) for both sources.
+ */
 export interface CatalogueData {
   fitments: PartFitment[];
   vehicles: Vehicle[];
@@ -117,6 +128,8 @@ interface Candidate {
   vehicleKey: string;
   /** Build month of the vehicle this record came from, if known. */
   buildMonth?: number;
+  /** ASA CAPS classification of that vehicle, looked up by VIN at suggestion time. */
+  classification?: string;
   /** The wording that matched (repairer text for quotes). */
   wording: string;
   description?: string;
@@ -170,7 +183,11 @@ function tierFor(vehicle: SuggestionVehicle, candidate: Candidate): MatchTier | 
   return null;
 }
 
-function quoteCandidates(mappings: QuoteMapping[], excludeQuoteKey?: string): Candidate[] {
+function quoteCandidates(
+  mappings: QuoteMapping[],
+  vehicleByVin: ReadonlyMap<string, Vehicle>,
+  excludeQuoteKey?: string,
+): Candidate[] {
   return mappings
     .filter((m) => !m.noGenuinePart && !m.sideConflict && m.quoteKey !== excludeQuoteKey)
     .map((m): Candidate => ({
@@ -186,6 +203,7 @@ function quoteCandidates(mappings: QuoteMapping[], excludeQuoteKey?: string): Ca
       vehicleKey: m.vin ?? m.quoteKey,
       // Mappings captured before build months were stored still have Mth/Yr.
       buildMonth: m.buildMonth ?? parsePartsCheckMthYr(m.mthYr),
+      classification: m.vin ? vehicleByVin.get(m.vin)?.classification : undefined,
       wording: m.repairerDescription,
       description: m.eraDescription,
       lastSeen: m.lastSeen,
@@ -194,8 +212,10 @@ function quoteCandidates(mappings: QuoteMapping[], excludeQuoteKey?: string): Ca
 }
 
 /** Fitments with an ASA description (copied in ASA CAPS); quote-only fitments have none. */
-function catalogueCandidates({ fitments, vehicles }: CatalogueData): Candidate[] {
-  const vehicleByVin = new Map(vehicles.map((v) => [v.vin, v]));
+function catalogueCandidates(
+  fitments: PartFitment[],
+  vehicleByVin: ReadonlyMap<string, Vehicle>,
+): Candidate[] {
   return fitments
     .filter((f) => f.description && f.partNumber !== 'NA')
     .map((f): Candidate => {
@@ -210,6 +230,7 @@ function catalogueCandidates({ fitments, vehicles }: CatalogueData): Candidate[]
         model: vehicle?.model,
         vehicleKey: f.vin,
         buildMonth: parseAsaProductionDate(vehicle?.productionFrom),
+        classification: vehicle?.classification,
         wording: f.description!,
         description: f.description,
         lastSeen: f.lastCapturedAt,
@@ -261,6 +282,15 @@ function describeBuilds(
   return `${range} (${nearest.signed < 0 ? 'older' : 'newer'} build)`;
 }
 
+function sameTrim(vehicle: SuggestionVehicle, candidate: Candidate): boolean {
+  return sameText(vehicle.classification, candidate.classification);
+}
+
+/** " (2 same trim XTSHR8)" — empty when no winning vehicle shares the quoted trim. */
+function describeTrim(vehicle: SuggestionVehicle, sameTrimCount: number): string {
+  return sameTrimCount > 0 ? ` (${sameTrimCount} same trim ${vehicle.classification})` : '';
+}
+
 function describeEvidence(
   source: SuggestionSource,
   tier: MatchTier,
@@ -268,7 +298,7 @@ function describeEvidence(
   timesUsed: number,
   lastSeen: string,
   winning: Candidate[],
-  builds: string,
+  details: string,
 ): string {
   const verb = source === 'quotes' ? 'used' : 'seen in ASA CAPS';
   const last = `last ${day(lastSeen)}`;
@@ -279,11 +309,11 @@ function describeEvidence(
         ? `used on this vehicle (${plural(timesUsed, 'time')}), ${last}`
         : `seen in ASA CAPS for this vehicle, ${last}`;
     case 'modelCode':
-      return `${verb} on ${plural(vehicleCount, 'vehicle')} · ${`${winning[0].modelCode} ${model}`.trim()}${builds}, ${last}`;
+      return `${verb} on ${plural(vehicleCount, 'vehicle')} · ${`${winning[0].modelCode} ${model}`.trim()}${details}, ${last}`;
     case 'vinPattern':
-      return `${verb} on ${plural(vehicleCount, 'vehicle')} with this VIN pattern · ${model}${builds}, ${last}`;
+      return `${verb} on ${plural(vehicleCount, 'vehicle')} with this VIN pattern · ${model}${details}, ${last}`;
     case 'model':
-      return `${verb} on ${plural(vehicleCount, 'vehicle')} · ${model}${builds}, ${last}`;
+      return `${verb} on ${plural(vehicleCount, 'vehicle')} · ${model}${details}, ${last}`;
   }
 }
 
@@ -311,6 +341,9 @@ function rank(
     const winning = hits.filter((hit) => hit.tier === tier).map((hit) => hit.candidate);
     const vehicleCount = new Set(winning.map((c) => c.vehicleKey)).size;
     const nearest = nearestBuild(vehicle, winning);
+    const sameTrimCount = new Set(
+      winning.filter((c) => sameTrim(vehicle, c)).map((c) => c.vehicleKey),
+    ).size;
     const best = hits.reduce((a, b) => (b.score > a.score ? b : a));
     const latest = hits.reduce((a, b) =>
       b.candidate.lastSeen > a.candidate.lastSeen ? b : a,
@@ -325,6 +358,7 @@ function rank(
         best.score < 1 && latest.source === 'quotes' ? best.candidate.wording : undefined,
       vehicleCount,
       buildGap: nearest?.gap,
+      sameTrimCount,
       timesUsed: hits.length,
       lastSeen: latest.lastSeen,
       isAccessory: latest.isAccessory,
@@ -335,17 +369,20 @@ function rank(
         hits.length,
         latest.lastSeen,
         winning,
-        describeBuilds(winning, nearest),
+        describeTrim(vehicle, sameTrimCount) + describeBuilds(winning, nearest),
       ),
     };
   });
 
-  // Build-date closeness ranks within a tier but never filters: Mth/Yr is
-  // only approximate. Undated suggestions sort after dated ones.
+  // Within a tier: same ASA trim first, then build-date closeness, then the
+  // rest. Neither filters — most shared parts span several trims, and Mth/Yr
+  // is only approximate. Undated suggestions sort after dated ones.
   const gapOrder = (gap: number | undefined) => gap ?? Number.POSITIVE_INFINITY;
+  const trimOrder = (count: number) => (count > 0 ? 0 : 1);
   return suggestions.sort(
     (a, b) =>
       TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier) ||
+      trimOrder(a.sameTrimCount) - trimOrder(b.sameTrimCount) ||
       gapOrder(a.buildGap) - gapOrder(b.buildGap) ||
       b.wordingScore - a.wordingScore ||
       b.vehicleCount - a.vehicleCount ||
@@ -360,9 +397,12 @@ export function suggestForLines(
   mappings: QuoteMapping[],
   options: SuggestOptions = {},
 ): LineSuggestions[] {
-  const fromQuotes = quoteCandidates(mappings, options.excludeQuoteKey);
+  const vehicleByVin = new Map((options.catalogue?.vehicles ?? []).map((v) => [v.vin, v]));
+  const fromQuotes = quoteCandidates(mappings, vehicleByVin, options.excludeQuoteKey);
   const fromQuotesWords = fromQuotes.map((c) => c.words);
-  const fromCatalogue = options.catalogue ? catalogueCandidates(options.catalogue) : [];
+  const fromCatalogue = options.catalogue
+    ? catalogueCandidates(options.catalogue.fitments, vehicleByVin)
+    : [];
   const fromCatalogueWords = fromCatalogue.map((c) => c.words);
 
   return lines.map((line) => {

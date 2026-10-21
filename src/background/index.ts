@@ -15,6 +15,7 @@ import {
   isSaveQuoteCaptureMessage,
   isSetCaptureEnabledMessage,
   isSetVehicleManuallyMessage,
+  asaVehicleUpdatedMessage,
   type ActiveVehicleState,
 } from '@/services/messaging';
 import type { DebugInfo, VehicleSession } from '@/types/asacaps';
@@ -93,6 +94,30 @@ async function handleClipboardCapture(text: string): Promise<void> {
   }
 
   await broadcastStateUpdated();
+  if (result.vin) await notifyPartsCheckTabs(result.vin);
+}
+
+/**
+ * Tells open PartsCheck tabs that ASA CAPS has (re)captured a VIN, so a
+ * quote for that vehicle can re-rank its suggestions with the trim now known.
+ * Finding the tabs needs no extra permission: the extension already has host
+ * access to PartsCheck.
+ */
+async function notifyPartsCheckTabs(vin: string): Promise<void> {
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://*.partscheck.com.au/*' });
+    await Promise.all(
+      tabs
+        .filter((tab) => tab.id !== undefined)
+        .map((tab) =>
+          chrome.tabs.sendMessage(tab.id!, asaVehicleUpdatedMessage(vin)).catch(() => {
+            // Tab without the content script (not a quote page, or not reloaded since install).
+          }),
+        ),
+    );
+  } catch (error) {
+    console.log(LOG_PREFIX, 'could not notify PartsCheck tabs:', error);
+  }
 }
 
 async function getActiveVehicleState(): Promise<ActiveVehicleState> {

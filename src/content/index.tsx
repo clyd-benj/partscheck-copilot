@@ -12,6 +12,7 @@ import {
 import {
   createQuoteSuggestionsStore,
   loadQuoteSuggestions,
+  refreshSuggestionsOnAsaVehicle,
   type QuoteSuggestionsStore,
 } from './quoteSuggestions';
 
@@ -56,5 +57,6 @@ if (isRfqPage()) {
   const suggestionsStore = createQuoteSuggestionsStore();
   injectSidebar(captureStore, suggestionsStore);
   void loadQuoteSuggestions(suggestionsStore, requestQuoteSuggestions);
+  refreshSuggestionsOnAsaVehicle(suggestionsStore, requestQuoteSuggestions);
   startQuoteCaptureWatcher(captureStore, requestSaveQuoteCapture);
 }
