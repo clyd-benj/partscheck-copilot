@@ -528,6 +528,7 @@ export async function importCsv(text: string): Promise<ImportResult> {
         mthYr: cell(row, col.mthYr),
         modelCode: cell(row, col.modelCode),
         ...importedBuildMonth(row),
+        learnedLinkId: existing?.learnedLinkId,
         firstSeen: existing && existing.firstSeen < firstSeen ? existing.firstSeen : firstSeen,
         lastSeen: existing && existing.lastSeen > lastSeen ? existing.lastSeen : lastSeen,
       },

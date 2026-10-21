@@ -38,6 +38,14 @@ export function QuoteCaptureSection({ store }: QuoteCaptureSectionProps) {
               </span>
             )}
           </p>
+          {status.result.learning && status.result.verifiedRows > 0 && (
+            <p className="px-4 py-1.5 text-sm text-neutral-900 dark:text-neutral-100">
+              {status.result.learning.verified} hidden suggestion
+              {status.result.learning.verified === 1 ? '' : 's'} verified (
+              {status.result.learning.nowConfirmed} now confirmed),{' '}
+              {status.result.learning.contradicted} contradicted
+            </p>
+          )}
           {status.result.verifiedRows > 0 &&
             status.result.verifiedRows !== status.result.requestedLines && (
               <p className={WARNING}>

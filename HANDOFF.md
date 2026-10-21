@@ -601,7 +601,7 @@ npm run build      # tsc -b && vite build -> dist/
 npm run dev        # Vite watch mode with HMR; load dist/ as unpacked, refresh on changes
 npm run lint       # eslint . --max-warnings 0
 npm run typecheck  # tsc -b only
-npm test           # vitest run — 21 files, 283 tests, all currently passing
+npm test           # vitest run — 22 files, 292 tests, all currently passing
 npm run test:watch
 npm run format     # prettier --write .
 ```
@@ -966,6 +966,7 @@ and a 0.75 Jaccard match let it through).
 - **Copy all in order** copies each line's top **confirmed** part only (blank otherwise); the
   header reads "Confirmed for N of M lines". The panel shows confirmed rows with a green
   "confirmed" label and groups the rest under "possible, check", greyed, with their cautions.
+  *(Superseded by §9.10: possible is no longer shown at all.)*
 - Tests: `suggestions.test.ts` (rewritten: the reported Outlander and shock cases, R/F ↔ R/F
   and RH FRONT, 2010+2013 KK1T confirms 2011, VIN-pattern inference, linked wordings, side,
   conflicts, catalogue, the real fixture), `normalise.test.ts` (parsing), and the ranking files
@@ -1019,3 +1020,58 @@ installed build (`880bb5b`) and `d603b0e`:
 - Another VIN, no catalogue: nothing (unchanged since `d603b0e`; the installed build showed
   all 12 via the old model-name/VIN-pattern tiers).
 - `tests/fixture-suggestions.test.ts` pins these results.
+
+### 9.10 Only CONFIRMED is shown; hidden POSSIBLE suggestions are learned from DMS Uploads
+
+Request (2026-10-21): show only confirmed suggestions; keep working out possible ones, hide
+them, and learn from them when a DMS Upload proves one right. Code: `learning.ts` (pure),
+wired in `captureQuote.ts` (both halves), `suggestions.ts` (`applyLearnedLinks`), the two
+sidebar sections, DB v5. Tests: `tests/learning.test.ts`.
+
+- **Sidebar.** `PartsChecklist` shows confirmed rows only. A line without one shows just the
+  requested line (the "wording unclear" note went too). "Confirmed for X of Y lines" and
+  "Copy all in order" are unchanged. `suggestForLines` still returns possible suggestions.
+- **Prediction log** (store `predictionLog`, id `${quoteKey}::${draftItemId}`, index
+  `quoteKey`). `suggestForQuote` logs, per line (unclear lines skipped), the hidden
+  candidates: part number, reason (`similar wording` / `outside build window` — no date
+  evidence or build date unknown / `both` / `other` — e.g. a weak side or a conflict
+  downgrade) plus the raw cautions, the line's wording key (`wordingKey`: normalised words,
+  side removed, sorted), side, VIN, model code (`resolveModelCode`: ASA record or VIN-pattern
+  inference) and build month. Each call replaces the line's entry (latest set only), except
+  entries already used by an upload.
+- **Verification** (`learnFromUpload`, called by `captureQuote` before the mappings are
+  saved). For each logged line without an `outcome`, the uploaded rows of that draft item:
+  a logged candidate equal to an uploaded part number → a verification of the link
+  (wording + side, part number, model code); every other logged candidate → a contradiction.
+  NA-only lines, side-conflict rows (ERA slips) and lines without a VIN prove nothing.
+  The entry then stores its `outcome`, so reloading an uploaded quote never counts twice; a
+  link also keeps one observation per VIN (same VIN uploaded twice counts once). The verifying
+  mapping gets `learnedLinkId`. Store `learnedLinks` (id `wording|side|PART|CODE`).
+- **Status** (`linkStatusFor`): 1 verification → PARTIAL, hidden. ≥2 verifications from
+  different VINs with build months, and verifications − (contradictions inside the verified
+  range; undated ones count) ≥ 2 → CONFIRMED, but only for vehicles of that model code built
+  within earliest–latest verifying build month ±12 months; outside → hidden. No model code →
+  never confirmed. A contradiction in range demotes it until it has 2 more verifications than
+  contradictions.
+- **No back door.** A mapping with `learnedLinkId` never counts through the usual rules — no
+  linked wording, no same-VIN/model-code/date evidence — only through its link (its ERA text
+  and line side still feed part-side evidence). Otherwise one upload within 12 months of the
+  next car, or builds bracketing it, would confirm the part. This holds even after the link is
+  confirmed, so the range rule can't be bypassed. `applyLearnedLinks` promotes a possible
+  suggestion whose link is confirmed for the vehicle (before the two-confirmed conflict
+  check), with evidence "verified by uploads on N CODE vehicles built Y–Y", and marks it
+  `learned` with its old cautions — such suggestions are still logged, so a later upload can
+  contradict them.
+- **Capture result** gains `learning {verified, nowConfirmed, contradicted}` (summed over this
+  quote's used log entries; `nowConfirmed` = verified links confirmed now).
+  `QuoteCaptureSection` shows "N hidden suggestions verified (M now confirmed), K
+  contradicted" after an upload.
+- **Not yet:** the prediction log and learned links aren't in the CSV/JSON export or backup;
+  importing keeps an existing mapping's `learnedLinkId`, but a restore into an empty
+  database would turn learned rows into ordinary ones.
+- Tests (`learning.test.ts`): the screenshot case (GK1W Eclipse Cross "L/H/R DOOR MOULD",
+  hidden 5757A787 and 5757A763 — exact wording but built years earlier; upload picks
+  5757A763 → PARTIAL, 5757A787 contradicted); PARTIAL stays hidden even with the upload within
+  12 months; a second VIN confirms in range (2024-09 yes; 2024-10 and 2022-05 no); same VIN
+  twice counts once; reload doesn't recount; a contradiction demotes until 3 v 1; NA proves
+  nothing; plus pure status checks.

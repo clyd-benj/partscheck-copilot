@@ -7,6 +7,15 @@ import {
   vehicleFromQuote,
 } from './buildMappings';
 import {
+  learnFromUpload,
+  loggedCandidates,
+  predictionLogId,
+  summariseLearning,
+  type LearnedLink,
+  type PredictionLogEntry,
+} from './learning';
+import {
+  resolveModelCode,
   suggestForLines,
   type LineSuggestions,
   type QuoteVehicle,
@@ -39,6 +48,31 @@ export async function captureQuote(
     now,
     existing: new Map(existing.map((mapping) => [mapping.id, mapping])),
   });
+
+  // Compare the uploaded rows with the hidden suggestions logged for this
+  // quote's lines: verifications and contradictions for the learned links.
+  const [predictions, storedLinks] = await Promise.all([
+    AsaCapsDatabase.listPredictionsForQuote(context.quoteKey),
+    AsaCapsDatabase.listLearnedLinks(),
+  ]);
+  const learning = learnFromUpload(
+    mappings
+      .filter((m) => !m.sideConflict)
+      .map((m) => ({
+        mappingId: m.id,
+        lineId: m.draftItemId,
+        partNumber: m.partNumber,
+        noGenuinePart: m.noGenuinePart,
+      })),
+    predictions,
+    new Map(storedLinks.map((link) => [link.id, link])),
+    now,
+  );
+  for (const mapping of mappings) {
+    mapping.learnedLinkId = learning.verifiedMappingLinks.get(mapping.id) ?? mapping.learnedLinkId;
+  }
+  await AsaCapsDatabase.putLearnedLinks(learning.links);
+  await AsaCapsDatabase.putPredictions(learning.entries);
   await AsaCapsDatabase.putQuoteMappings(mappings);
 
   // Part numbers the repairer typed in are never answers; keep them, and
@@ -71,7 +105,15 @@ export async function captureQuote(
     for (const fitment of fitments) await AsaCapsDatabase.putFitment(fitment);
   }
 
-  return summariseCapture(context, rows, mappings, Array.from(allSupplied.values()));
+  const links = new Map<string, LearnedLink>(storedLinks.map((link) => [link.id, link]));
+  for (const link of learning.links) links.set(link.id, link);
+  const entries = new Map(predictions.map((entry) => [entry.id, entry]));
+  for (const entry of learning.entries) entries.set(entry.id, entry);
+
+  return {
+    ...summariseCapture(context, rows, mappings, Array.from(allSupplied.values())),
+    learning: summariseLearning(Array.from(entries.values()), links),
+  };
 }
 
 /**
@@ -79,7 +121,9 @@ export async function captureQuote(
  * mappings first, then the ASA CAPS catalogue's fitments. The vehicle's
  * model code, classification (trim) and build month come from the catalogue
  * when the VIN has been seen there; the build month falls back to the
- * quote's Mth/Yr.
+ * quote's Mth/Yr. Each line's hidden (POSSIBLE) candidates are logged for
+ * this quote, replacing the previous set, so a later DMS Upload can verify
+ * or contradict them — except lines whose log was already used by an upload.
  */
 export async function suggestForQuote(
   vehicle: QuoteVehicle,
@@ -94,13 +138,43 @@ export async function suggestForQuote(
     buildMonth: vehicleBuildMonth(known, vehicle.mthYr)?.month,
     classification: known?.classification,
   };
-  const [mappings, fitments, vehicles] = await Promise.all([
+  const [mappings, fitments, vehicles, learnedLinks] = await Promise.all([
     AsaCapsDatabase.listQuoteMappings(),
     AsaCapsDatabase.listFitments(),
     AsaCapsDatabase.listVehicles(),
+    AsaCapsDatabase.listLearnedLinks(),
   ]);
-  return suggestForLines(query, lines, mappings, {
+  const result = suggestForLines(query, lines, mappings, {
     excludeQuoteKey,
     catalogue: { fitments, vehicles },
+    learnedLinks,
   });
+
+  if (excludeQuoteKey) {
+    const used = new Set(
+      (await AsaCapsDatabase.listPredictionsForQuote(excludeQuoteKey))
+        .filter((entry) => entry.outcome)
+        .map((entry) => entry.id),
+    );
+    const modelCode = resolveModelCode(query, vehicles);
+    const now = new Date().toISOString();
+    const entries = result
+      .filter((line) => !line.wordingUnclear)
+      .map((line): PredictionLogEntry => ({
+        id: predictionLogId(excludeQuoteKey, line.id),
+        quoteKey: excludeQuoteKey,
+        lineId: line.id,
+        description: line.description,
+        wording: line.wording,
+        side: line.side,
+        vin: vehicle.vin,
+        modelCode,
+        buildMonth: query.buildMonth,
+        candidates: loggedCandidates(line.suggestions),
+        loggedAt: now,
+      }))
+      .filter((entry) => !used.has(entry.id));
+    await AsaCapsDatabase.putPredictions(entries);
+  }
+  return result;
 }

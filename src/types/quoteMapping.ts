@@ -96,6 +96,12 @@ export interface QuoteMapping {
   buildMonth?: number;
   /** Where buildMonth came from: ASA CAPS productionFrom, or PartsCheck Mth/Yr. */
   buildMonthSource?: BuildMonthSource;
+  /**
+   * Set when this row verified a hidden (POSSIBLE) suggestion: the learned
+   * link's id (services/quoteCapture/learning.ts). The row then counts in
+   * suggestions only through that link, never through the usual rules.
+   */
+  learnedLinkId?: string;
 
   firstSeen: string;
   lastSeen: string;
@@ -154,4 +160,6 @@ export interface QuoteCaptureResult {
   repairerSuppliedRows: number;
   /** Repairer-supplied values on this quote now paired with a verified number. */
   repairerSuppliedLinked: number;
+  /** Hidden suggestions this quote's upload proved right / chose against (learning.ts). */
+  learning?: { verified: number; nowConfirmed: number; contradicted: number };
 }

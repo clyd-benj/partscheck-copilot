@@ -1,4 +1,5 @@
 import { buildYear, parseAsaProductionDate, parsePartsCheckMthYr } from './buildDate';
+import { applyLearnedLinks, wordingKey, type LearnedLink } from './learning';
 import { parseDescription } from './normalise';
 import { resolvePartSides, type PartSide, type PartSideEvidence } from './partSide';
 import { POSITION_TOKENS } from './synonyms';
@@ -26,8 +27,13 @@ import type { QuoteMapping, Side } from '@/types/quoteMapping';
  *    before and after it.
  * POSSIBLE — same VIN or model code, but only similar wording, no
  * build-date evidence, a side only part-number parity supports (or that
- * parity contradicts), or a line asking for both sides. Shown greyed, never
- * copied by "copy all".
+ * parity contradicts), or a line asking for both sides. Never shown and
+ * never copied: logged per quote line and learned from (learning.ts). A
+ * possible part whose learned link is CONFIRMED for this vehicle (verified
+ * by DMS Uploads on two VINs of this model code, built within range) is
+ * promoted to confirmed. Rows that verified a learned link count only
+ * through it (no linked wording, no vehicle evidence), so one upload can't
+ * confirm a part by the back door, nor outside the verified build range.
  * If two different part numbers would both be confirmed for one line, they
  * contradict each other and both become possible.
  * Everything else is dropped: model-name-only or VIN-pattern-only matches,
@@ -82,8 +88,13 @@ export interface PartSuggestion {
   partNumber: string;
   source: SuggestionSource;
   level: ConfidenceLevel;
-  /** Why a suggestion is only possible, for the panel. Empty when confirmed. */
+  /** Why a suggestion is only possible. Empty when confirmed. */
   cautions: string[];
+  /**
+   * Set when a learned link promoted this suggestion from possible: the
+   * cautions it had. It's still logged, so later uploads can contradict it.
+   */
+  learned?: { cautions: string[] };
   /** ERA description (quotes) or ASA description (catalogue). */
   description?: string;
   tier: MatchTier;
@@ -108,6 +119,8 @@ export interface LineSuggestions {
   id: string;
   description: string;
   side: Side;
+  /** The line's wording key (learning.ts wordingKey); '' when unclear. */
+  wording: string;
   /** Side/position shorthand couldn't be read; no suggestions are offered. */
   wordingUnclear: boolean;
   suggestions: PartSuggestion[];
@@ -127,6 +140,8 @@ interface SuggestOptions {
   excludeQuoteKey?: string;
   limit?: number;
   catalogue?: CatalogueData;
+  /** Links learned from DMS Uploads of hidden suggestions (learning.ts). */
+  learnedLinks?: LearnedLink[];
 }
 
 /** One vehicle a part was used on (quote mapping) or listed for (ASA fitment). */
@@ -218,6 +233,14 @@ function modelCodeLookup(vehicles: Vehicle[]): (vin: string | undefined) => stri
  * a conflicting or unknown side or the wrong hand; possible-only (with a
  * caution) for a weakly known side or a line asking for both sides.
  */
+/** The quoted vehicle's model code: given, else inferred from its VIN pattern. */
+export function resolveModelCode(
+  vehicle: SuggestionVehicle,
+  vehicles: Vehicle[],
+): string | undefined {
+  return vehicle.modelCode ?? modelCodeLookup(vehicles)(vehicle.vin);
+}
+
 function sideFit(lineSide: Side, part: PartSide): { caution?: string } | null {
   if (part.hand === 'CONFLICT' || part.hand === 'UNKNOWN') return null;
   if (lineSide === 'BOTH') {
@@ -374,9 +397,15 @@ export function suggestForLines(
   const modelCodeFor = modelCodeLookup(vehicles);
   const queryModelCode = vehicle.modelCode ?? modelCodeFor(vehicle.vin);
 
-  const usableMappings = mappings.filter(
+  const learnedLinks = options.learnedLinks ?? [];
+  const linkById = new Map(learnedLinks.map((link) => [link.id, link]));
+  const answered = mappings.filter(
     (m) => !m.noGenuinePart && !m.sideConflict && m.quoteKey !== options.excludeQuoteKey,
   );
+  // A row that verified a hidden suggestion counts only through its learned
+  // link (confirmed for its model code and verified build range); otherwise
+  // it only tells us the part's side.
+  const usableMappings = answered.filter((m) => !m.learnedLinkId);
   const usableFitments = (options.catalogue?.fitments ?? []).filter(
     (f) => f.description && f.partNumber !== 'NA',
   );
@@ -441,7 +470,7 @@ export function suggestForLines(
     }
     return evidence;
   };
-  for (const m of usableMappings) {
+  for (const m of answered) {
     const evidence = evidenceFor(m.partNumber);
     if (m.eraDescription) evidence.eraDescriptions.push(m.eraDescription);
     const line = parseDescription(m.repairerDescription);
@@ -453,7 +482,8 @@ export function suggestForLines(
   return lines.map((line) => {
     const parsed = parseDescription(line.description);
     const base = { id: line.id, description: line.description, side: parsed.side };
-    if (parsed.unclear) return { ...base, wordingUnclear: true, suggestions: [] };
+    if (parsed.unclear) return { ...base, wording: '', wordingUnclear: true, suggestions: [] };
+    const wording = wordingKey(parsed.words);
     const lineWords = new Set(parsed.words);
 
     const wordingByPart = new Map<string, WordingMatch>();
@@ -495,6 +525,13 @@ export function suggestForLines(
       if (best) suggestions.push(best);
     }
 
+    applyLearnedLinks(
+      suggestions,
+      { wording, side: parsed.side },
+      { modelCode: queryModelCode, buildMonth: vehicle.buildMonth },
+      linkById,
+    );
+
     // Two different part numbers both confirmed for one line contradict each
     // other: neither is trustworthy enough to copy without checking.
     const confirmed = suggestions.filter((s) => s.level === 'confirmed');
@@ -520,6 +557,7 @@ export function suggestForLines(
 
     return {
       ...base,
+      wording,
       wordingUnclear: false,
       suggestions: suggestions.slice(0, options.limit ?? DEFAULT_LIMIT),
     };

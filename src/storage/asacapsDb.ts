@@ -19,9 +19,10 @@ import type {
 } from '@/types/asacaps';
 import { DEFAULT_SETTINGS } from '@/types/asacaps';
 import type { QuoteMapping, RepairerSuppliedPart } from '@/types/quoteMapping';
+import type { LearnedLink, PredictionLogEntry } from '@/services/quoteCapture/learning';
 
 const DB_NAME = 'asa-caps-catalogue';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 const STORE_VEHICLES = 'vehicles';
 const STORE_SESSIONS = 'sessions';
@@ -31,6 +32,8 @@ const STORE_SETTINGS = 'settings';
 const STORE_BACKUP = 'backup';
 const STORE_QUOTE_MAPPINGS = 'quoteMappings';
 const STORE_REPAIRER_SUPPLIED = 'repairerSupplied';
+const STORE_PREDICTION_LOG = 'predictionLog';
+const STORE_LEARNED_LINKS = 'learnedLinks';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -88,6 +91,16 @@ function openDatabase(): Promise<IDBDatabase> {
         const store = db.createObjectStore(STORE_REPAIRER_SUPPLIED, { keyPath: 'id' });
         store.createIndex('quoteKey', 'quoteKey', { unique: false });
         store.createIndex('vin', 'vin', { unique: false });
+      }
+
+      // v5: hidden (POSSIBLE) suggestions logged per quote line, and the
+      // links DMS Uploads verified or contradicted (see learning.ts).
+      if (!db.objectStoreNames.contains(STORE_PREDICTION_LOG)) {
+        const store = db.createObjectStore(STORE_PREDICTION_LOG, { keyPath: 'id' });
+        store.createIndex('quoteKey', 'quoteKey', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORE_LEARNED_LINKS)) {
+        db.createObjectStore(STORE_LEARNED_LINKS, { keyPath: 'id' });
       }
     };
 
@@ -287,6 +300,25 @@ export const AsaCapsDatabase = {
   },
   async putRepairerSupplied(records: RepairerSuppliedPart[]): Promise<void> {
     await putAll(STORE_REPAIRER_SUPPLIED, records);
+  },
+
+  // Prediction log: the latest hidden candidates per quote line (keyed by quote + line)
+  async listPredictionsForQuote(quoteKey: string): Promise<PredictionLogEntry[]> {
+    const db = await openDatabase();
+    const tx = db.transaction(STORE_PREDICTION_LOG, 'readonly');
+    const index = tx.objectStore(STORE_PREDICTION_LOG).index('quoteKey');
+    return promisifyRequest(index.getAll(quoteKey));
+  },
+  async putPredictions(entries: PredictionLogEntry[]): Promise<void> {
+    await putAll(STORE_PREDICTION_LOG, entries);
+  },
+
+  // Learned links (wording + side, part number, model code)
+  async listLearnedLinks(): Promise<LearnedLink[]> {
+    return getAll<LearnedLink>(STORE_LEARNED_LINKS);
+  },
+  async putLearnedLinks(links: LearnedLink[]): Promise<void> {
+    await putAll(STORE_LEARNED_LINKS, links);
   },
 };
 

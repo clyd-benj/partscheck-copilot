@@ -22,14 +22,12 @@ const SOURCE_LABEL: Record<SuggestionSource, string> = {
   catalogue: 'from ASA catalogue',
 };
 
+/** A CONFIRMED suggestion. POSSIBLE ones are never shown (they're logged and learned from). */
 function SuggestionRow({ suggestion }: { suggestion: PartSuggestion }) {
   const { copied, copy } = useCopyToClipboard();
-  const confirmed = suggestion.level === 'confirmed';
 
   return (
-    <div
-      className={`flex items-start gap-2 py-0.5 pl-10 pr-4 text-xs ${confirmed ? '' : 'opacity-60'}`}
-    >
+    <div className="flex items-start gap-2 py-0.5 pl-10 pr-4 text-xs">
       <button
         type="button"
         onClick={() => copy(suggestion.partNumber)}
@@ -46,9 +44,7 @@ function SuggestionRow({ suggestion }: { suggestion: PartSuggestion }) {
           </div>
         )}
         <div className="text-neutral-500 dark:text-neutral-400">
-          {confirmed && (
-            <span className="font-medium text-green-700 dark:text-green-400">confirmed · </span>
-          )}
+          <span className="font-medium text-green-700 dark:text-green-400">confirmed · </span>
           <span
             className={
               suggestion.source === 'quotes'
@@ -62,16 +58,6 @@ function SuggestionRow({ suggestion }: { suggestion: PartSuggestion }) {
           {/* Non-breaking hyphens so dates don't wrap mid-way. */}
           {suggestion.evidence.replace(/-/g, '\u2011')}
         </div>
-        {suggestion.similarWording && (
-          <div className="italic text-neutral-400 dark:text-neutral-500">
-            similar to “{suggestion.similarWording}”
-          </div>
-        )}
-        {suggestion.cautions.length > 0 && (
-          <div className="text-amber-700 dark:text-amber-400">
-            {suggestion.cautions.join(' · ')}
-          </div>
-        )}
       </div>
     </div>
   );
@@ -108,7 +94,6 @@ export function PartsChecklist({ parts, suggestionsStore }: PartsChecklistProps)
   );
   const perPart = parts.map((part) => ({
     suggestions: linesById.get(part.id)?.suggestions ?? NO_SUGGESTIONS,
-    wordingUnclear: linesById.get(part.id)?.wordingUnclear ?? false,
   }));
   const confirmedLines = perPart.filter((line) =>
     line.suggestions.some((s) => s.level === 'confirmed'),
@@ -160,28 +145,11 @@ export function PartsChecklist({ parts, suggestionsStore }: PartsChecklistProps)
                   {part.description}
                 </span>
               </label>
-              {perPart[i].wordingUnclear && (
-                <p className="py-0.5 pl-10 pr-4 text-xs text-amber-700 dark:text-amber-400">
-                  wording unclear — side or position can't be read, no suggestions
-                </p>
-              )}
               {perPart[i].suggestions
                 .filter((suggestion) => suggestion.level === 'confirmed')
                 .map((suggestion) => (
                   <SuggestionRow key={suggestion.partNumber} suggestion={suggestion} />
                 ))}
-              {perPart[i].suggestions.some((suggestion) => suggestion.level === 'possible') && (
-                <>
-                  <p className="pl-10 pr-4 pt-0.5 text-[11px] uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
-                    possible, check
-                  </p>
-                  {perPart[i].suggestions
-                    .filter((suggestion) => suggestion.level === 'possible')
-                    .map((suggestion) => (
-                      <SuggestionRow key={suggestion.partNumber} suggestion={suggestion} />
-                    ))}
-                </>
-              )}
             </div>
           ))}
         </>

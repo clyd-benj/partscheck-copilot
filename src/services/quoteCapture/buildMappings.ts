@@ -96,6 +96,7 @@ export function buildQuoteMappings(
       modelCode: options.modelCode,
       buildMonth: options.buildMonth?.month,
       buildMonthSource: options.buildMonth?.source,
+      learnedLinkId: options.existing?.get(id)?.learnedLinkId,
       firstSeen: options.existing?.get(id)?.firstSeen ?? options.now,
       lastSeen: options.now,
     };
