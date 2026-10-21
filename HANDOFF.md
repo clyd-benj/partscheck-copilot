@@ -676,6 +676,9 @@ different environment; don't assume it will.
   "make it only show the exact match" feedback in §4.5) — these were genuine decisions, not
   defaults, and should not be silently reverted or "corrected" back toward the original
   written spec without the user asking again.
+- **Pushing (user instruction, 2026-10-21): "always push".** After committing work on the
+  feature branch (`claude/practical-rubin-nuxkc0`), push it without asking. This doesn't
+  extend to merging into `main` or opening PRs — still ask for those.
 - This file itself should be kept up to date. If you make a non-trivial architecture
   decision, fix a non-obvious bug, or have the user override a previous decision, add it
   here in the same level of detail as the existing entries, don't just rely on commit
