@@ -9,8 +9,8 @@
 
 /**
  * Side-plus-position shorthand, rewritten before anything else so the
- * slash isn't lost. "L/R" and "L/F" are deliberately absent: repairers
- * also write "L/R" to mean "left and right".
+ * slash isn't lost. "L/R" is handled separately in normalise.ts: as a
+ * prefix it means left-rear, anywhere else it may mean "left and right".
  */
 export const SIDE_COMPOUNDS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\b([LR])\/H\/F\b/g, ' $1H FRONT '],
@@ -22,7 +22,31 @@ export const SIDE_COMPOUNDS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bLEFT HAND\b/g, ' LH '],
   [/\bRIGHT HAND\b/g, ' RH '],
   [/\b([LR])HS\b/g, ' $1H '],
+  // "L/F", "R/F" (and LF/RF): left/right front. "R/R": right rear (rear
+  // right reads the same).
+  [/\b([LR])\/F\b/g, ' $1H FRONT '],
+  [/\b([LR])F\b/g, ' $1H FRONT '],
+  [/\bR\/R\b/g, ' RH REAR '],
 ];
+
+/**
+ * A single letter and a slash in front of a word, after the compounds and
+ * PHRASE_SYNONYMS (F/LAMP, R/BAR...) have been rewritten: "L/" can only be
+ * left and "F/" only front, but "R/" could be rear or right
+ * ("R/LOWER CONTROL ARM"), so it makes the wording unclear.
+ */
+export const LETTER_PREFIXES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bL\/(?=[A-Z])/g, ' LH '],
+  [/\bF\/(?=[A-Z])/g, ' FRONT '],
+  [/\bR\/(?=[A-Z])/g, ' UNCLEAR '],
+];
+
+/**
+ * Leftover single letters (and LR) after all the rewriting: position or side
+ * shorthand we couldn't read. Never matched as words; they make the line's
+ * wording unclear.
+ */
+export const UNREADABLE_TOKENS: ReadonlySet<string> = new Set(['L', 'R', 'F', 'LR']);
 
 /** Words that only carry the side; removed from the normalised text once the side is parsed. */
 export const LEFT_TOKENS: ReadonlySet<string> = new Set(['LH', 'LEFT']);
