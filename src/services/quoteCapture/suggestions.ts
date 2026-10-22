@@ -1,5 +1,5 @@
 import { buildYear, parseAsaProductionDate, parsePartsCheckMthYr } from './buildDate';
-import { applyLearnedLinks, wordingKey, type LearnedLink } from './learning';
+import { applyLearnedLinks, wordingKey, type PartLink } from './learning';
 import { parseDescription } from './normalise';
 import { resolvePartSides, type PartSide, type PartSideEvidence } from './partSide';
 import { POSITION_TOKENS } from './synonyms';
@@ -140,8 +140,8 @@ interface SuggestOptions {
   excludeQuoteKey?: string;
   limit?: number;
   catalogue?: CatalogueData;
-  /** Links learned from DMS Uploads of hidden suggestions (learning.ts). */
-  learnedLinks?: LearnedLink[];
+  /** Part links learned from DMS Uploads of hidden suggestions (learning.ts). */
+  partLinks?: PartLink[];
 }
 
 /** One vehicle a part was used on (quote mapping) or listed for (ASA fitment). */
@@ -397,8 +397,7 @@ export function suggestForLines(
   const modelCodeFor = modelCodeLookup(vehicles);
   const queryModelCode = vehicle.modelCode ?? modelCodeFor(vehicle.vin);
 
-  const learnedLinks = options.learnedLinks ?? [];
-  const linkById = new Map(learnedLinks.map((link) => [link.id, link]));
+  const linkById = new Map((options.partLinks ?? []).map((link) => [link.id, link]));
   const answered = mappings.filter(
     (m) => !m.noGenuinePart && !m.sideConflict && m.quoteKey !== options.excludeQuoteKey,
   );

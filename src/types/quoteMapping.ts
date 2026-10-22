@@ -97,7 +97,7 @@ export interface QuoteMapping {
   /** Where buildMonth came from: ASA CAPS productionFrom, or PartsCheck Mth/Yr. */
   buildMonthSource?: BuildMonthSource;
   /**
-   * Set when this row verified a hidden (POSSIBLE) suggestion: the learned
+   * Set when this row verified a hidden (POSSIBLE) suggestion: the part
    * link's id (services/quoteCapture/learning.ts). The row then counts in
    * suggestions only through that link, never through the usual rules.
    */

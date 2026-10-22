@@ -11,7 +11,7 @@ import {
   loggedCandidates,
   predictionLogId,
   summariseLearning,
-  type LearnedLink,
+  type PartLink,
   type PredictionLogEntry,
 } from './learning';
 import {
@@ -53,7 +53,7 @@ export async function captureQuote(
   // quote's lines: verifications and contradictions for the learned links.
   const [predictions, storedLinks] = await Promise.all([
     AsaCapsDatabase.listPredictionsForQuote(context.quoteKey),
-    AsaCapsDatabase.listLearnedLinks(),
+    AsaCapsDatabase.listPartLinks(),
   ]);
   const learning = learnFromUpload(
     mappings
@@ -71,7 +71,7 @@ export async function captureQuote(
   for (const mapping of mappings) {
     mapping.learnedLinkId = learning.verifiedMappingLinks.get(mapping.id) ?? mapping.learnedLinkId;
   }
-  await AsaCapsDatabase.putLearnedLinks(learning.links);
+  await AsaCapsDatabase.putPartLinks(learning.links);
   await AsaCapsDatabase.putPredictions(learning.entries);
   await AsaCapsDatabase.putQuoteMappings(mappings);
 
@@ -105,7 +105,7 @@ export async function captureQuote(
     for (const fitment of fitments) await AsaCapsDatabase.putFitment(fitment);
   }
 
-  const links = new Map<string, LearnedLink>(storedLinks.map((link) => [link.id, link]));
+  const links = new Map<string, PartLink>(storedLinks.map((link) => [link.id, link]));
   for (const link of learning.links) links.set(link.id, link);
   const entries = new Map(predictions.map((entry) => [entry.id, entry]));
   for (const entry of learning.entries) entries.set(entry.id, entry);
@@ -138,16 +138,16 @@ export async function suggestForQuote(
     buildMonth: vehicleBuildMonth(known, vehicle.mthYr)?.month,
     classification: known?.classification,
   };
-  const [mappings, fitments, vehicles, learnedLinks] = await Promise.all([
+  const [mappings, fitments, vehicles, partLinks] = await Promise.all([
     AsaCapsDatabase.listQuoteMappings(),
     AsaCapsDatabase.listFitments(),
     AsaCapsDatabase.listVehicles(),
-    AsaCapsDatabase.listLearnedLinks(),
+    AsaCapsDatabase.listPartLinks(),
   ]);
   const result = suggestForLines(query, lines, mappings, {
     excludeQuoteKey,
     catalogue: { fitments, vehicles },
-    learnedLinks,
+    partLinks,
   });
 
   if (excludeQuoteKey) {

@@ -19,10 +19,14 @@ import type {
 } from '@/types/asacaps';
 import { DEFAULT_SETTINGS } from '@/types/asacaps';
 import type { QuoteMapping, RepairerSuppliedPart } from '@/types/quoteMapping';
-import type { LearnedLink, PredictionLogEntry } from '@/services/quoteCapture/learning';
+import {
+  partLinksFromLegacy,
+  type PartLink,
+  type PredictionLogEntry,
+} from '@/services/quoteCapture/learning';
 
 const DB_NAME = 'asa-caps-catalogue';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 const STORE_VEHICLES = 'vehicles';
 const STORE_SESSIONS = 'sessions';
@@ -33,7 +37,9 @@ const STORE_BACKUP = 'backup';
 const STORE_QUOTE_MAPPINGS = 'quoteMappings';
 const STORE_REPAIRER_SUPPLIED = 'repairerSupplied';
 const STORE_PREDICTION_LOG = 'predictionLog';
-const STORE_LEARNED_LINKS = 'learnedLinks';
+/** v5 only: links per (wording + side, part, model code); merged into partLinks by v6. */
+const STORE_LEGACY_LEARNED_LINKS = 'learnedLinks';
+const STORE_PART_LINKS = 'partLinks';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -93,14 +99,23 @@ function openDatabase(): Promise<IDBDatabase> {
         store.createIndex('vin', 'vin', { unique: false });
       }
 
-      // v5: hidden (POSSIBLE) suggestions logged per quote line, and the
-      // links DMS Uploads verified or contradicted (see learning.ts).
+      // v5: hidden (POSSIBLE) suggestions logged per quote line (see learning.ts).
       if (!db.objectStoreNames.contains(STORE_PREDICTION_LOG)) {
         const store = db.createObjectStore(STORE_PREDICTION_LOG, { keyPath: 'id' });
         store.createIndex('quoteKey', 'quoteKey', { unique: false });
       }
-      if (!db.objectStoreNames.contains(STORE_LEARNED_LINKS)) {
-        db.createObjectStore(STORE_LEARNED_LINKS, { keyPath: 'id' });
+
+      // v6: one link per (part number, model code), wordings as aliases.
+      // Links from v5 are merged in, then their store is dropped.
+      if (!db.objectStoreNames.contains(STORE_PART_LINKS)) {
+        const partLinks = db.createObjectStore(STORE_PART_LINKS, { keyPath: 'id' });
+        if (db.objectStoreNames.contains(STORE_LEGACY_LEARNED_LINKS)) {
+          const legacy = request.transaction!.objectStore(STORE_LEGACY_LEARNED_LINKS).getAll();
+          legacy.onsuccess = () => {
+            for (const link of partLinksFromLegacy(legacy.result)) partLinks.put(link);
+            db.deleteObjectStore(STORE_LEGACY_LEARNED_LINKS);
+          };
+        }
       }
     };
 
@@ -313,12 +328,12 @@ export const AsaCapsDatabase = {
     await putAll(STORE_PREDICTION_LOG, entries);
   },
 
-  // Learned links (wording + side, part number, model code)
-  async listLearnedLinks(): Promise<LearnedLink[]> {
-    return getAll<LearnedLink>(STORE_LEARNED_LINKS);
+  // Part links (part number, model code) learned from DMS Uploads
+  async listPartLinks(): Promise<PartLink[]> {
+    return getAll<PartLink>(STORE_PART_LINKS);
   },
-  async putLearnedLinks(links: LearnedLink[]): Promise<void> {
-    await putAll(STORE_LEARNED_LINKS, links);
+  async putPartLinks(links: PartLink[]): Promise<void> {
+    await putAll(STORE_PART_LINKS, links);
   },
 };
 

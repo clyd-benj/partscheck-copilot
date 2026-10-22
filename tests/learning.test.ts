@@ -4,19 +4,21 @@ import { IDBFactory } from "fake-indexeddb";
 import { AsaCapsDatabase } from "@/storage/asacapsDb";
 import { captureQuote, suggestForQuote } from "@/services/quoteCapture/captureQuote";
 import {
+  emptyPartLink,
   isLinkConfirmed,
-  learnedLinkId,
   linkStatusFor,
-  withObservation,
-  type LearnedLink,
+  partLinkId,
+  partLinksFromLegacy,
+  withContradiction,
+  withVerification,
 } from "@/services/quoteCapture/learning";
 import type { QuoteContext, QuoteRow } from "@/types/quoteMapping";
 import { mapping, newVin, vehicle, ym } from "./suggestionHelpers";
 
 const LINE = "L/H/R DOOR MOULD";
 const WORDING = "DOOR MOULDING REAR";
-const LINK_763 = learnedLinkId(WORDING, "LH", "5757A763", "GK1W");
-const LINK_787 = learnedLinkId(WORDING, "LH", "5757A787", "GK1W");
+const LINK_763 = partLinkId("5757A763", "GK1W");
+const LINK_787 = partLinkId("5757A787", "GK1W");
 
 let quoteSeq = 0;
 
@@ -48,17 +50,19 @@ function row(partNumber: string): QuoteRow {
 }
 
 /** Suggests for one "L/H/R DOOR MOULD" line on a new quote, then DMS-uploads `chosen`. */
-async function quote(vin: string, chosen?: string, quoteKey = `draft:learn-${++quoteSeq}`) {
+async function quote(vin: string, chosen?: string, quoteKey = `draft:learn-${++quoteSeq}`, description = LINE) {
   const context: QuoteContext = { quoteKey, vin, model: "Eclipse Cross" };
-  const [line] = await suggestForQuote({ vin, model: "Eclipse Cross" }, [{ id: "L1", description: LINE }], quoteKey);
-  const upload = chosen ? await captureQuote(context, [row(chosen)], "2026-10-21T00:00:00.000Z") : undefined;
+  const [line] = await suggestForQuote({ vin, model: "Eclipse Cross" }, [{ id: "L1", description }], quoteKey);
+  const upload = chosen
+    ? await captureQuote(context, [{ ...row(chosen), repairerDescription: description }], "2026-10-21T00:00:00.000Z")
+    : undefined;
   return { line, upload, quoteKey };
 }
 
 const confirmed = (line: { suggestions: { level: string; partNumber: string }[] }) =>
   line.suggestions.filter((s) => s.level === "confirmed").map((s) => s.partNumber);
 
-const link = async (id: string) => (await AsaCapsDatabase.listLearnedLinks()).find((l) => l.id === id);
+const link = async (id: string) => (await AsaCapsDatabase.listPartLinks()).find((l) => l.id === id);
 
 describe("learning from hidden suggestions", () => {
   beforeEach(async () => {
@@ -156,31 +160,72 @@ describe("learning from hidden suggestions", () => {
     expect(confirmed((await quote(await eclipseCross(2024, 1))).line)).toEqual(["5757A763"]);
   });
 
+  it("a new wording of a confirmed part joins it after one verification; until then it shows nothing", async () => {
+    await quote(await eclipseCross(2023, 6), "5757A763");
+    await quote(await eclipseCross(2023, 9), "5757A763");
+    const ALIAS = "L/H/R DOOR MOULD TRIM";
+
+    // Similar wording on a car in range: the part link is confirmed, but this wording isn't an alias.
+    const before = await quote(await eclipseCross(2023, 7), "5757A763", undefined, ALIAS);
+    expect(before.line.suggestions.map((s) => s.partNumber)).toContain("5757A763");
+    expect(confirmed(before.line)).toEqual([]);
+    expect((await link(LINK_763))!.aliases.map((a) => [a.wording, a.side, a.vins.length])).toEqual([
+      [WORDING, "LH", 2],
+      ["DOOR MOULDING REAR TRIM", "LH", 1],
+    ]);
+
+    // One verification was enough: the new wording now confirms in range.
+    expect(confirmed((await quote(await eclipseCross(2023, 8), undefined, undefined, ALIAS)).line)).toEqual([
+      "5757A763",
+    ]);
+    // ...but not for the other side.
+    expect(confirmed((await quote(await eclipseCross(2023, 8), undefined, undefined, "R/H/R DOOR MOULD TRIM")).line)).toEqual([]);
+  });
+
+  it("upgrading keeps links learned by the previous build", async () => {
+    await AsaCapsDatabase.resetForTests();
+    vi.stubGlobal("indexedDB", new IDBFactory());
+    await new Promise<void>((resolve) => {
+      const open = indexedDB.open("asa-caps-catalogue", 5);
+      open.onupgradeneeded = () => {
+        open.result.createObjectStore("learnedLinks", { keyPath: "id" }).put({
+          id: `${WORDING}|LH|5757A763|GK1W`,
+          wording: WORDING,
+          side: "LH",
+          partNumber: "5757A763",
+          modelCode: "GK1W",
+          verifications: [{ vin: "V1", buildMonth: ym(2023, 6), quoteKey: "q", at: "t" }],
+          contradictions: [],
+        });
+      };
+      open.onsuccess = () => {
+        open.result.close();
+        resolve();
+      };
+    });
+    expect(await AsaCapsDatabase.listPartLinks()).toMatchObject([
+      { id: LINK_763, verifications: [{ vin: "V1" }], aliases: [{ wording: WORDING, side: "LH", vins: ["V1"] }] },
+    ]);
+  });
+
   it("NA answers prove nothing either way", async () => {
     const { upload } = await quote(await eclipseCross(2023, 6), "NA");
     expect(upload!.learning).toEqual({ verified: 0, nowConfirmed: 0, contradicted: 0 });
-    expect(await AsaCapsDatabase.listLearnedLinks()).toEqual([]);
+    expect(await AsaCapsDatabase.listPartLinks()).toEqual([]);
   });
 });
 
-describe("learned link status", () => {
-  const base: LearnedLink = {
-    id: "x",
-    wording: "BONNET",
-    side: "NONE",
-    partNumber: "5900A001",
-    modelCode: "KK1T",
-    verifications: [],
-    contradictions: [],
-  };
+describe("part link status", () => {
+  const base = emptyPartLink("5900A001", "KK1T");
   const obs = (vin: string, buildMonth?: number) => ({ vin, buildMonth, quoteKey: "q", at: "t" });
   const kk1t = (buildMonth: number) => ({ modelCode: "KK1T", buildMonth });
+  const BONNET = { wording: "BONNET", side: "NONE" as const };
 
   it("needs two dated verifications on different VINs", () => {
-    const one = withObservation(base, "verifications", obs("A", ym(2022, 1)));
+    const one = withVerification(base, obs("A", ym(2022, 1)), BONNET);
     expect(linkStatusFor(one, kk1t(ym(2022, 1)))).toBe("partial");
-    expect(withObservation(one, "verifications", obs("a", ym(2022, 3)))).toBe(one);
-    const two = withObservation(one, "verifications", obs("B", ym(2022, 3)));
+    expect(withVerification(one, obs("a", ym(2022, 3)), BONNET)).toEqual(one);
+    const two = withVerification(one, obs("B", ym(2022, 3)), BONNET);
     expect(linkStatusFor(two, kk1t(ym(2022, 2)))).toBe("confirmed");
     expect(linkStatusFor(two, { modelCode: "KK1W", buildMonth: ym(2022, 2) })).toBe("partial");
     expect(linkStatusFor(two, { modelCode: "KK1T" })).toBe("partial");
@@ -191,5 +236,22 @@ describe("learned link status", () => {
     const two = { ...base, verifications: [obs("A", ym(2022, 1)), obs("B", ym(2022, 3))] };
     expect(isLinkConfirmed({ ...two, contradictions: [obs("C", ym(2025, 1))] })).toBe(true);
     expect(isLinkConfirmed({ ...two, contradictions: [obs("C", ym(2022, 6))] })).toBe(false);
+    expect(withContradiction(two, obs("C")).contradictions).toHaveLength(1);
+  });
+
+  it("merges links stored per wording by the previous build, wordings becoming aliases", () => {
+    const [merged] = partLinksFromLegacy([
+      { ...BONNET, partNumber: "5900A001", modelCode: "KK1T", verifications: [obs("A", 1)], contradictions: [] },
+      { wording: "HOOD", side: "NONE", partNumber: "5900A001", modelCode: "KK1T", verifications: [obs("B", 2)], contradictions: [obs("C")] },
+    ]);
+    expect(merged).toMatchObject({
+      id: "5900A001|KK1T",
+      verifications: [{ vin: "A" }, { vin: "B" }],
+      contradictions: [{ vin: "C" }],
+      aliases: [
+        { wording: "BONNET", vins: ["A"] },
+        { wording: "HOOD", vins: ["B"] },
+      ],
+    });
   });
 });
