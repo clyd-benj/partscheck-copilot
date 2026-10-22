@@ -35,6 +35,18 @@ export function parseAsaProductionDate(value: string | undefined): number | unde
   return toBuildMonth(Number(match[1]), Number(match[2]));
 }
 
+/**
+ * ASA CAPS production date "2021.11.3" → a comparable day number
+ * (build month * 31 + day). Needs the day; undefined otherwise.
+ */
+export function parseAsaProductionDay(value: string | undefined): number | undefined {
+  const match = value?.trim().match(/^(\d{4})\.(\d{1,2})\.(\d{1,2})$/);
+  if (!match) return undefined;
+  const month = toBuildMonth(Number(match[1]), Number(match[2]));
+  const day = Number(match[3]);
+  return month === undefined || day < 1 || day > 31 ? undefined : month * 31 + day;
+}
+
 /** PartsCheck Mth/Yr "6/2022" or "06/2022" → build month. */
 export function parsePartsCheckMthYr(value: string | undefined): number | undefined {
   const match = value?.trim().match(/^(\d{1,2})\s*\/\s*(\d{4})$/);

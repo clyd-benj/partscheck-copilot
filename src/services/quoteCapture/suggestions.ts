@@ -1,8 +1,14 @@
-import { buildYear, parseAsaProductionDate, parsePartsCheckMthYr } from './buildDate';
+import {
+  buildYear,
+  parseAsaProductionDate,
+  parseAsaProductionDay,
+  parsePartsCheckMthYr,
+} from './buildDate';
 import { applyLearnedLinks, wordingKey, type PartLink } from './learning';
 import { parseDescription } from './normalise';
 import { resolvePartSides, type PartSide, type PartSideEvidence } from './partSide';
 import { POSITION_TOKENS } from './synonyms';
+import { checkVariants, type VariantAnswer } from './variants';
 import type { PartFitment, Vehicle } from '@/types/asacaps';
 import type { QuoteMapping, Side } from '@/types/quoteMapping';
 
@@ -34,6 +40,9 @@ import type { QuoteMapping, Side } from '@/types/quoteMapping';
  * promoted to confirmed. Rows that verified a learned link count only
  * through it (no linked wording, no vehicle evidence), so one upload can't
  * confirm a part by the back door, nor outside the verified build range.
+ * If the line's wording + side on this model code has been answered with
+ * different part numbers, a model-code confirmation also needs this vehicle
+ * on that part's side of every clean trim/colour/date split (variants.ts).
  * If two different part numbers would both be confirmed for one line, they
  * contradict each other and both become possible.
  * Everything else is dropped: model-name-only or VIN-pattern-only matches,
@@ -68,6 +77,10 @@ export interface SuggestionVehicle {
   buildMonth?: number;
   /** ASA CAPS classification (trim) of the quoted VIN, if it's in the catalogue. */
   classification?: string;
+  /** ASA CAPS exterior colour code of the quoted VIN, if known. */
+  exteriorColour?: string;
+  /** ASA CAPS production date of the quoted VIN ("2021.11.3"), if known. */
+  productionDate?: string;
 }
 
 /** The quoted vehicle as read from the PartsCheck page. */
@@ -478,6 +491,52 @@ export function suggestForLines(
   for (const f of usableFitments) evidenceFor(f.partNumber).asaDescriptions.push(f.description!);
   const partSides = resolvePartSides(evidenceByPart);
 
+  // Every answer per (wording + side, model code), from quotes (learned rows
+  // included) and the catalogue: where a wording varies by trim, colour or date.
+  const answersByKey = new Map<string, VariantAnswer[]>();
+  const variantKey = (wording: string, side: Side, modelCode: string) =>
+    `${wording}|${side}|${modelCode.toUpperCase()}`;
+  const addAnswer = (
+    partNumber: string,
+    text: string,
+    vin: string,
+    modelCode: string | undefined,
+    description?: string,
+  ) => {
+    const parsed = parseDescription(text);
+    if (parsed.unclear || parsed.words.length === 0 || !modelCode) return;
+    const known = vehicleByVin.get(vin.toUpperCase());
+    const key = variantKey(wordingKey(parsed.words), parsed.side, modelCode);
+    const list = answersByKey.get(key) ?? [];
+    list.push({
+      partNumber,
+      vin,
+      classification: known?.classification,
+      exteriorColour: known?.exteriorColor,
+      productionDay: parseAsaProductionDay(known?.productionFrom),
+      description,
+    });
+    answersByKey.set(key, list);
+  };
+  for (const m of answered) {
+    if (m.vin)
+      addAnswer(
+        m.partNumber,
+        m.repairerDescription,
+        m.vin,
+        m.modelCode ?? modelCodeFor(m.vin),
+        m.eraDescription,
+      );
+  }
+  for (const f of usableFitments) {
+    addAnswer(f.partNumber, f.description!, f.vin, modelCodeFor(f.vin), f.description);
+  }
+  const queryVariants = {
+    classification: vehicle.classification,
+    exteriorColour: vehicle.exteriorColour,
+    productionDay: parseAsaProductionDay(vehicle.productionDate),
+  };
+
   return lines.map((line) => {
     const parsed = parseDescription(line.description);
     const base = { id: line.id, description: line.description, side: parsed.side };
@@ -530,6 +589,22 @@ export function suggestForLines(
       { modelCode: queryModelCode, buildMonth: vehicle.buildMonth },
       linkById,
     );
+
+    // A wording that varies on this model code: confirmed only on the part's
+    // own side of every clean split. The vehicle's own past answer still stands.
+    if (queryModelCode) {
+      const variants = checkVariants(
+        answersByKey.get(variantKey(wording, parsed.side, queryModelCode)) ?? [],
+        queryVariants,
+      );
+      for (const suggestion of suggestions) {
+        if (suggestion.level !== 'confirmed' || suggestion.tier === 'vin') continue;
+        const veto = variants.veto(suggestion.partNumber);
+        if (!veto) continue;
+        suggestion.level = 'possible';
+        suggestion.cautions.push(veto);
+      }
+    }
 
     // Two different part numbers both confirmed for one line contradict each
     // other: neither is trustworthy enough to copy without checking.

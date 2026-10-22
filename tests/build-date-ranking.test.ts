@@ -42,12 +42,14 @@ describe("build-date evidence and ranking", () => {
     expect(rank(QUERY, [kk1t("B", ym(2021, 5))])[0].level).toBe("possible");
   });
 
-  it("puts undated parts after dated ones, and an undated part is only possible", () => {
+  it("puts undated parts after dated ones; two part numbers with no clean split are never confirmed", () => {
     const stored = [kk1t("UNDATED"), kk1t("UNDATED"), kk1t("DATED", ym(2022, 1))];
-    expect(rank(QUERY, stored).map((s) => [s.partNumber, s.level])).toEqual([
-      ["DATED", "confirmed"],
+    const ranked = rank(QUERY, stored);
+    expect(ranked.map((s) => [s.partNumber, s.level])).toEqual([
+      ["DATED", "possible"],
       ["UNDATED", "possible"],
     ]);
+    expect(ranked[0].cautions).toEqual(["part number varies on this model (no clean split)"]);
   });
 
   it("uses Mth/Yr on mappings captured before build months were stored", () => {
@@ -65,7 +67,8 @@ describe("build-date evidence and ranking", () => {
   it("uses ASA production dates for catalogue suggestions", () => {
     const near = newVin("MMBXXXX5");
     const far = newVin("MMBXXXX6");
-    const result = suggestForLines(QUERY, [{ id: "1", description: "HOOD" }], [], {
+    // HOOD varies by build date here (2015 vs 2021): the quoted car's ASA date puts it on NEAR's side.
+    const result = suggestForLines({ ...QUERY, productionDate: "2022.6.1" }, [{ id: "1", description: "HOOD" }], [], {
       catalogue: {
         vehicles: [
           vehicle(near, { modelCode: "KK1T", productionFrom: "2021.11.30" }),

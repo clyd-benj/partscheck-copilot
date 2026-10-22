@@ -137,6 +137,8 @@ export async function suggestForQuote(
     modelCode: known?.modelCode,
     buildMonth: vehicleBuildMonth(known, vehicle.mthYr)?.month,
     classification: known?.classification,
+    exteriorColour: known?.exteriorColor,
+    productionDate: known?.productionFrom,
   };
   const [mappings, fitments, vehicles, partLinks] = await Promise.all([
     AsaCapsDatabase.listQuoteMappings(),

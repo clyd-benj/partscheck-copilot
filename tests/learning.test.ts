@@ -70,9 +70,12 @@ describe("learning from hidden suggestions", () => {
     vi.stubGlobal("indexedDB", new IDBFactory());
     // Both parts were used on GK1W Eclipse Crosses with this exact wording,
     // but built years before the cars quoted here: possible only (hidden).
+    // Two part numbers, one wording: it varies, here cleanly by build date
+    // (5757A787 on a 2019 build, 5757A763 from 2020).
+    const [vin787, vin763] = [await eclipseCross(2019, 1), await eclipseCross(2020, 1)];
     await AsaCapsDatabase.putQuoteMappings([
-      mapping({ repairerDescription: LINE, partNumber: "5757A787", eraDescription: "MOULDING RR DOOR LH", modelCode: "GK1W", buildMonth: ym(2019, 1) }),
-      mapping({ repairerDescription: LINE, partNumber: "5757A763", eraDescription: "MOULDING RR DOOR LH", modelCode: "GK1W", buildMonth: ym(2020, 1) }),
+      mapping({ vin: vin787, repairerDescription: LINE, partNumber: "5757A787", eraDescription: "MOULDING RR DOOR LH", modelCode: "GK1W", buildMonth: ym(2019, 1) }),
+      mapping({ vin: vin763, repairerDescription: LINE, partNumber: "5757A763", eraDescription: "MOULDING RR DOOR LH", modelCode: "GK1W", buildMonth: ym(2020, 1) }),
     ]);
   });
 
@@ -155,9 +158,16 @@ describe("learning from hidden suggestions", () => {
     expect((await link(LINK_763))!.contradictions).toHaveLength(1);
     expect(confirmed((await quote(await eclipseCross(2024, 1))).line)).toEqual([]);
 
-    // One more verification: 3 against 1.
+    // One more verification: 3 against 1, so the link itself is confirmed again...
     await quote(await eclipseCross(2023, 8), "5757A763");
-    expect(confirmed((await quote(await eclipseCross(2024, 1))).line)).toEqual(["5757A763"]);
+    expect(isLinkConfirmed((await link(LINK_763))!)).toBe(true);
+    // ...but 5757A787 on a late-2023 build broke the clean date split
+    // (787, 763…763, 787): the wording now varies with no clean split, so it stays manual.
+    const after = await quote(await eclipseCross(2024, 1));
+    expect(confirmed(after.line)).toEqual([]);
+    expect(after.line.suggestions.find((s) => s.partNumber === "5757A763")!.cautions).toContain(
+      "part number varies on this model (no clean split)",
+    );
   });
 
   it("a new wording of a confirmed part joins it after one verification; until then it shows nothing", async () => {

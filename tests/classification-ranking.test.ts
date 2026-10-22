@@ -85,7 +85,7 @@ describe("same-trim (ASA CAPS classification) ranking", () => {
     return { v, vehicle: vehicle(v, classification, { productionFrom: undefined }), buildMonth };
   };
 
-  it("ranks parts used on the same trim first, ahead of build-date closeness (two matches: both possible)", () => {
+  it("ranks parts used on the same trim first; the wording varies by trim, so only the same-trim part confirms", () => {
     const same = kk1t("XTSHR8", ym(2021, 8));
     const other = kk1t("XTSLR8", ym(2022, 5));
     const ranked = rank(
@@ -94,12 +94,12 @@ describe("same-trim (ASA CAPS classification) ranking", () => {
       [same.vehicle, other.vehicle],
     );
     expect(ranked.map((s) => [s.partNumber, s.level, s.sameTrimCount, s.buildGap])).toEqual([
-      ["SAME-TRIM", "possible", 1, 10],
+      ["SAME-TRIM", "confirmed", 1, 10],
       ["OTHER-TRIM", "possible", 0, 1],
     ]);
   });
 
-  it("never lifts a possible part above a confirmed one", () => {
+  it("a near build on another trim doesn't confirm when the wording varies by trim", () => {
     const sameButFar = kk1t("XTSHR8", ym(2016, 1));
     const otherNear = kk1t("XTSLR8", ym(2022, 5));
     const ranked = rank(
@@ -108,9 +108,10 @@ describe("same-trim (ASA CAPS classification) ranking", () => {
       [sameButFar.vehicle, otherNear.vehicle],
     );
     expect(ranked.map((s) => [s.partNumber, s.level])).toEqual([
-      ["OTHER-TRIM", "confirmed"],
       ["SAME-TRIM", "possible"],
+      ["OTHER-TRIM", "possible"],
     ]);
+    expect(ranked[1].cautions).toContain("varies by trim: other part for this vehicle");
   });
 
   it("never filters: a part only seen on other trims is still suggested", () => {
@@ -195,7 +196,7 @@ describe("suggestForQuote uses the quoted VIN's classification from the catalogu
 
     await AsaCapsDatabase.putVehicle(vehicle(QUERY.vin!, "XTSHR8"));
     expect((await suggestForQuote(quoted, lines))[0].suggestions.map((s) => [s.partNumber, s.level])).toEqual([
-      ["SAME-TRIM", "possible"],
+      ["SAME-TRIM", "confirmed"],
       ["OTHER-TRIM", "possible"],
     ]);
   });
