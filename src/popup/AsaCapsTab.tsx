@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActiveVehicleSection } from './sections/ActiveVehicleSection';
 import { ManualControlsSection } from './sections/ManualControlsSection';
 import { RecentPartsSection } from './sections/RecentPartsSection';
+import { SuggestionScoreSection } from './sections/SuggestionScoreSection';
 import { AsaCapsDatabase } from '@/storage/asacapsDb';
 import { requestActiveVehicleState, type ActiveVehicleState } from '@/services/messaging';
 import type { DebugInfo, Settings } from '@/types/asacaps';
@@ -69,6 +70,8 @@ export function AsaCapsTab() {
         onCaptureEnabledChange={(enabled) => setSettings((prev) => (prev ? { ...prev, captureEnabled: enabled } : prev))}
         onVehicleChanged={refreshVehicleState}
       />
+
+      <SuggestionScoreSection />
 
       <button
         type="button"

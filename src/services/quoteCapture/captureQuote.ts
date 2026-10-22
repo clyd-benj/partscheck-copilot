@@ -49,8 +49,9 @@ export async function captureQuote(
     existing: new Map(existing.map((mapping) => [mapping.id, mapping])),
   });
 
-  // Compare the uploaded rows with the hidden suggestions logged for this
-  // quote's lines: verifications and contradictions for the learned links.
+  // Compare the uploaded rows with what was logged for this quote's lines:
+  // the confirmed suggestion shown (self-score; a miss is a contradiction)
+  // and the hidden candidates (verifications and contradictions).
   const [predictions, storedLinks] = await Promise.all([
     AsaCapsDatabase.listPredictionsForQuote(context.quoteKey),
     AsaCapsDatabase.listPartLinks(),
@@ -67,6 +68,7 @@ export async function captureQuote(
     predictions,
     new Map(storedLinks.map((link) => [link.id, link])),
     now,
+    { reference: context.reference, eraQuoteNo: context.eraQuoteNo },
   );
   for (const mapping of mappings) {
     mapping.learnedLinkId = learning.verifiedMappingLinks.get(mapping.id) ?? mapping.learnedLinkId;
@@ -116,12 +118,19 @@ export async function captureQuote(
   };
 }
 
+/** The confirmed suggestion the sidebar shows first for a line (the one "copy all" copies). */
+function shownSuggestion(line: LineSuggestions): PredictionLogEntry['shown'] {
+  const top = line.suggestions.find((s) => s.level === 'confirmed');
+  return top && { partNumber: top.partNumber, rule: top.rule ?? '' };
+}
+
 /**
  * Background-side suggestions for a quote's unfilled lines: past quote
  * mappings first, then the ASA CAPS catalogue's fitments. The vehicle's
  * model code, classification (trim) and build month come from the catalogue
  * when the VIN has been seen there; the build month falls back to the
- * quote's Mth/Yr. Each line's hidden (POSSIBLE) candidates are logged for
+ * quote's Mth/Yr. Each line's confirmed suggestion shown and its hidden
+ * (POSSIBLE) candidates are logged for
  * this quote, replacing the previous set, so a later DMS Upload can verify
  * or contradict them — except lines whose log was already used by an upload.
  */
@@ -161,7 +170,6 @@ export async function suggestForQuote(
     const modelCode = resolveModelCode(query, vehicles);
     const now = new Date().toISOString();
     const entries = result
-      .filter((line) => !line.wordingUnclear)
       .map((line): PredictionLogEntry => ({
         id: predictionLogId(excludeQuoteKey, line.id),
         quoteKey: excludeQuoteKey,
@@ -170,12 +178,14 @@ export async function suggestForQuote(
         wording: line.wording,
         side: line.side,
         vin: vehicle.vin,
+        model: vehicle.model,
         modelCode,
         classification: known?.classification,
         exteriorColour: known?.exteriorColor,
         productionDate: known?.productionFrom,
         buildMonth: query.buildMonth,
         candidates: loggedCandidates(line.suggestions),
+        shown: shownSuggestion(line),
         loggedAt: now,
       }))
       .filter((entry) => !used.has(entry.id));

@@ -324,6 +324,9 @@ export const AsaCapsDatabase = {
     const index = tx.objectStore(STORE_PREDICTION_LOG).index('quoteKey');
     return promisifyRequest(index.getAll(quoteKey));
   },
+  async listPredictions(): Promise<PredictionLogEntry[]> {
+    return getAll<PredictionLogEntry>(STORE_PREDICTION_LOG);
+  },
   async putPredictions(entries: PredictionLogEntry[]): Promise<void> {
     await putAll(STORE_PREDICTION_LOG, entries);
   },

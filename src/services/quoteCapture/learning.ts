@@ -48,7 +48,29 @@ export interface PredictionLogEntry {
   candidates: LoggedCandidate[];
   loggedAt: string;
   /** Set once the quote is DMS-uploaded: part link ids verified / contradicted. */
-  outcome?: { at: string; verified: string[]; contradicted: string[] };
+  /** Vehicle model as on the quote, for the misses list. */
+  model?: string;
+  /** The CONFIRMED suggestion shown for the line (the one "copy all" copies), and the rule behind it. */
+  shown?: { partNumber: string; rule: string };
+  outcome?: UploadOutcome;
+}
+
+/** What the DMS Upload of the quote showed for one logged line. */
+export interface UploadOutcome {
+  at: string;
+  /** Part link ids of hidden candidates verified / contradicted. */
+  verified: string[];
+  contradicted: string[];
+  /** Part numbers uploaded for the line (NA excluded). */
+  uploaded?: string[];
+  /**
+   * Self-score of the shown confirmed suggestion: `correct` when it was
+   * uploaded, `miss` when it wasn't, `none` when nothing was confirmed.
+   * Missing on outcomes stored before scoring existed.
+   */
+  score?: 'correct' | 'miss' | 'none';
+  reference?: string;
+  eraQuoteNo?: string;
 }
 
 export interface LinkObservation {
@@ -240,11 +262,13 @@ export interface UploadedRow {
 }
 
 /**
- * Compares the uploaded rows of each quote line with that line's logged
- * hidden candidates. A candidate the upload chose records a verification
- * (and its wording as an alias); every other logged candidate records a
- * contradiction. Lines answered only with NA prove nothing either way. Each
- * log entry is used once (its outcome is stored), so reloading an uploaded
+ * Compares the uploaded rows of each quote line with that line's log entry.
+ * Self-score: the confirmed suggestion shown is `correct` if uploaded, else
+ * a `miss` — which also records a contradiction for its part link. Hidden
+ * candidates: one the upload chose records a verification (and its wording
+ * as an alias); every other logged candidate records a contradiction.
+ * Lines answered only with NA prove nothing and aren't scored. Each log
+ * entry is used once (its outcome is stored), so reloading an uploaded
  * quote doesn't count again; and a link counts each VIN once.
  */
 export function learnFromUpload(
@@ -252,6 +276,7 @@ export function learnFromUpload(
   predictions: readonly PredictionLogEntry[],
   existingLinks: ReadonlyMap<string, PartLink>,
   now: string,
+  quote: { reference?: string; eraQuoteNo?: string } = {},
 ): UploadLearning {
   const links = new Map(existingLinks);
   const changed = new Set<string>();
@@ -259,9 +284,24 @@ export function learnFromUpload(
   const verifiedMappingLinks = new Map<string, string>();
 
   for (const entry of predictions) {
-    if (entry.outcome || entry.candidates.length === 0 || !entry.vin) continue;
+    if (entry.outcome) continue;
     const answered = rows.filter((r) => r.lineId === entry.lineId && !r.noGenuinePart);
     if (answered.length === 0) continue;
+    const uploaded = answered.map((r) => r.partNumber.toUpperCase());
+    const shown = entry.shown?.partNumber.toUpperCase();
+    const score = !shown ? 'none' : uploaded.includes(shown) ? 'correct' : 'miss';
+    const outcome: UploadOutcome = {
+      at: now,
+      verified: [],
+      contradicted: [],
+      uploaded,
+      score,
+      reference: quote.reference,
+      eraQuoteNo: quote.eraQuoteNo,
+    };
+    entries.push({ ...entry, outcome });
+    if (!entry.vin) continue;
+
     const observation: LinkObservation = {
       vin: entry.vin,
       buildMonth: entry.buildMonth,
@@ -269,8 +309,16 @@ export function learnFromUpload(
       at: now,
     };
     const modelCode = entry.modelCode ?? '';
-    const verified: string[] = [];
-    const contradicted: string[] = [];
+    const { verified, contradicted } = outcome;
+
+    if (score === 'miss') {
+      const id = partLinkId(shown!, modelCode);
+      links.set(
+        id,
+        withContradiction(links.get(id) ?? emptyPartLink(shown!, modelCode), observation),
+      );
+      changed.add(id);
+    }
 
     for (const candidate of entry.candidates) {
       const id = partLinkId(candidate.partNumber, modelCode);
@@ -292,7 +340,6 @@ export function learnFromUpload(
         contradicted.push(id);
       }
     }
-    entries.push({ ...entry, outcome: { at: now, verified, contradicted } });
   }
 
   return {
@@ -303,6 +350,12 @@ export function learnFromUpload(
 }
 
 export interface LearningSummary {
+  /** Lines scored (logged before upload, answered with a part number). */
+  lines: number;
+  /** Of those, lines that had a confirmed suggestion. */
+  confirmed: number;
+  /** Confirmed suggestions that were uploaded. */
+  correct: number;
   /** Hidden suggestions an upload proved right. */
   verified: number;
   /** Of those, links now confirmed (for vehicles in their model code and range). */
@@ -317,7 +370,11 @@ export function summariseLearning(
   links: ReadonlyMap<string, PartLink>,
 ): LearningSummary {
   const verified = entries.flatMap((e) => e.outcome?.verified ?? []);
+  const scored = entries.filter((e) => e.outcome?.score);
   return {
+    lines: scored.length,
+    confirmed: scored.filter((e) => e.outcome!.score !== 'none').length,
+    correct: scored.filter((e) => e.outcome!.score === 'correct').length,
     verified: verified.length,
     nowConfirmed: new Set(
       verified.filter((id) => {
@@ -326,6 +383,54 @@ export function summariseLearning(
       }),
     ).size,
     contradicted: entries.reduce((n, e) => n + (e.outcome?.contradicted.length ?? 0), 0),
+  };
+}
+
+/** A confirmed suggestion that wasn't what the upload chose. */
+export interface ScoreMiss {
+  id: string;
+  at: string;
+  /** Repairer's reference, else ERA quote number, else the PartsCheck draft key. */
+  quoteRef: string;
+  description: string;
+  vehicle: string;
+  suggested: string;
+  uploaded: string[];
+  rule: string;
+}
+
+export interface ScoreTotals {
+  /** Lines scored (logged before upload, answered with a part number). */
+  lines: number;
+  /** Lines with a confirmed suggestion (hit rate = confirmed / lines). */
+  confirmed: number;
+  /** Confirmed suggestions that were uploaded (accuracy = correct / confirmed). */
+  correct: number;
+  /** Newest first. */
+  misses: ScoreMiss[];
+}
+
+/** Running self-score over every uploaded quote line in the prediction log. */
+export function scoreTotals(entries: readonly PredictionLogEntry[]): ScoreTotals {
+  const scored = entries.filter((e) => e.outcome?.score);
+  const misses = scored
+    .filter((e) => e.outcome!.score === 'miss')
+    .map((e): ScoreMiss => ({
+      id: e.id,
+      at: e.outcome!.at,
+      quoteRef: e.outcome!.reference ?? e.outcome!.eraQuoteNo ?? e.quoteKey,
+      description: e.description,
+      vehicle: [e.model, e.modelCode, e.vin].filter(Boolean).join(' · '),
+      suggested: e.shown!.partNumber,
+      uploaded: e.outcome!.uploaded ?? [],
+      rule: e.shown!.rule,
+    }))
+    .sort((a, b) => b.at.localeCompare(a.at));
+  return {
+    lines: scored.length,
+    confirmed: scored.filter((e) => e.outcome!.score !== 'none').length,
+    correct: scored.filter((e) => e.outcome!.score === 'correct').length,
+    misses,
   };
 }
 
@@ -362,7 +467,29 @@ export function applyLearnedLinks(
     suggestion.level = 'confirmed';
     suggestion.cautions = [];
     suggestion.evidence = describeLink(link);
+    suggestion.rule = 'verified by uploads (part link + wording alias)';
   }
+}
+
+/**
+ * Contradictions from uploads (hidden candidates not chosen, or misses) of
+ * vehicles built within 12 months of this one (undated ones count), with
+ * fewer than 2 more verifications than those: a confirmed suggestion of
+ * the part is held back. Its reason, or undefined.
+ */
+export function contradictionVeto(
+  link: PartLink | undefined,
+  vehicle: { buildMonth?: number },
+): string | undefined {
+  if (!link) return undefined;
+  const near = link.contradictions.filter(
+    (c) =>
+      c.buildMonth === undefined ||
+      vehicle.buildMonth === undefined ||
+      Math.abs(c.buildMonth - vehicle.buildMonth) <= RANGE_MARGIN_MONTHS,
+  );
+  if (near.length === 0 || link.verifications.length - near.length >= 2) return undefined;
+  return 'contradicted by an upload';
 }
 
 /** A link stored by the 4e745e0 build: one per (wording + side, part number, model code). */

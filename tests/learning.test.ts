@@ -102,7 +102,7 @@ describe("learning from hidden suggestions", () => {
       ["5757A787", "outside build window"],
     ]);
 
-    expect(upload!.learning).toEqual({ verified: 1, nowConfirmed: 0, contradicted: 1 });
+    expect(upload!.learning).toEqual({ lines: 1, confirmed: 0, correct: 0, verified: 1, nowConfirmed: 0, contradicted: 1 });
     const l763 = (await link(LINK_763))!;
     expect(l763.verifications.map((v) => v.vin)).toEqual([vin]);
     expect(linkStatusFor(l763, { modelCode: "GK1W", buildMonth: ym(2023, 6) })).toBe("partial");
@@ -120,7 +120,7 @@ describe("learning from hidden suggestions", () => {
   it("a second VIN confirms it, for that model code built within the verified range ±12 months", async () => {
     await quote(await eclipseCross(2023, 6), "5757A763");
     const { upload } = await quote(await eclipseCross(2023, 9), "5757A763");
-    expect(upload!.learning).toEqual({ verified: 1, nowConfirmed: 1, contradicted: 1 });
+    expect(upload!.learning).toEqual({ lines: 1, confirmed: 0, correct: 0, verified: 1, nowConfirmed: 1, contradicted: 1 });
 
     const inRange = await quote(await eclipseCross(2024, 9));
     expect(confirmed(inRange.line)).toEqual(["5757A763"]);
@@ -135,7 +135,7 @@ describe("learning from hidden suggestions", () => {
     const vin = await eclipseCross(2023, 6);
     await quote(vin, "5757A763");
     const again = await quote(vin, "5757A763");
-    expect(again.upload!.learning).toEqual({ verified: 1, nowConfirmed: 0, contradicted: 1 });
+    expect(again.upload!.learning).toEqual({ lines: 1, confirmed: 0, correct: 0, verified: 1, nowConfirmed: 0, contradicted: 1 });
     expect((await link(LINK_763))!.verifications).toHaveLength(1);
     expect(confirmed((await quote(await eclipseCross(2023, 7))).line)).toEqual([]);
   });
@@ -144,7 +144,7 @@ describe("learning from hidden suggestions", () => {
     const vin = await eclipseCross(2023, 6);
     const { quoteKey } = await quote(vin, "5757A763");
     const reload = await captureQuote({ quoteKey, vin }, [row("5757A763")], "2026-10-22T00:00:00.000Z");
-    expect(reload.learning).toEqual({ verified: 1, nowConfirmed: 0, contradicted: 1 });
+    expect(reload.learning).toEqual({ lines: 1, confirmed: 0, correct: 0, verified: 1, nowConfirmed: 0, contradicted: 1 });
     expect((await link(LINK_787))!.contradictions).toHaveLength(1);
   });
 
@@ -220,7 +220,7 @@ describe("learning from hidden suggestions", () => {
 
   it("NA answers prove nothing either way", async () => {
     const { upload } = await quote(await eclipseCross(2023, 6), "NA");
-    expect(upload!.learning).toEqual({ verified: 0, nowConfirmed: 0, contradicted: 0 });
+    expect(upload!.learning).toEqual({ lines: 0, confirmed: 0, correct: 0, verified: 0, nowConfirmed: 0, contradicted: 0 });
     expect(await AsaCapsDatabase.listPartLinks()).toEqual([]);
   });
 });

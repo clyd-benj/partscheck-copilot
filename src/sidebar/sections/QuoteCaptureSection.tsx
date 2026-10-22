@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { SectionCard } from '@/components/SectionCard';
 import type { QuoteCaptureStore } from '@/content/quoteCaptureWatcher';
+import type { QuoteCaptureResult } from '@/types/quoteMapping';
 
 interface QuoteCaptureSectionProps {
   store: QuoteCaptureStore;
@@ -8,6 +9,27 @@ interface QuoteCaptureSectionProps {
 
 const MUTED = 'px-4 py-1.5 text-sm italic text-neutral-400 dark:text-neutral-600';
 const WARNING = 'px-4 py-1.5 text-sm text-amber-700 dark:text-amber-400';
+
+/**
+ * The latest upload's self-score and learning, e.g. "4 of 7 lines confirmed,
+ * 4 correct; 2 hidden guesses verified, 1 now confirmed".
+ */
+function LearningLine({ learning }: { learning: NonNullable<QuoteCaptureResult['learning']> }) {
+  const lines = `${learning.lines} line${learning.lines === 1 ? '' : 's'}`;
+  const guesses = `${learning.verified} hidden guess${learning.verified === 1 ? '' : 'es'}`;
+  const misses = learning.confirmed - learning.correct;
+  return (
+    <p className="px-4 py-1.5 text-sm text-neutral-900 dark:text-neutral-100">
+      {`${learning.confirmed} of ${lines} confirmed, ${learning.correct} correct; ${guesses} verified, ${learning.nowConfirmed} now confirmed`}
+      {learning.contradicted > 0 && `, ${learning.contradicted} contradicted`}
+      {misses > 0 && (
+        <span className="text-amber-700 dark:text-amber-400">
+          {` — ${misses} miss${misses === 1 ? '' : 'es'}, listed in the popup`}
+        </span>
+      )}
+    </p>
+  );
+}
 
 /** Status of the read-only capture of this quote's filled rows into quoteMappings. */
 export function QuoteCaptureSection({ store }: QuoteCaptureSectionProps) {
@@ -39,12 +61,7 @@ export function QuoteCaptureSection({ store }: QuoteCaptureSectionProps) {
             )}
           </p>
           {status.result.learning && status.result.verifiedRows > 0 && (
-            <p className="px-4 py-1.5 text-sm text-neutral-900 dark:text-neutral-100">
-              {status.result.learning.verified} hidden suggestion
-              {status.result.learning.verified === 1 ? '' : 's'} verified (
-              {status.result.learning.nowConfirmed} now confirmed),{' '}
-              {status.result.learning.contradicted} contradicted
-            </p>
+            <LearningLine learning={status.result.learning} />
           )}
           {status.result.verifiedRows > 0 &&
             status.result.verifiedRows !== status.result.requestedLines && (

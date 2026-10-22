@@ -4,7 +4,13 @@ import {
   parseAsaProductionDay,
   parsePartsCheckMthYr,
 } from './buildDate';
-import { applyLearnedLinks, wordingKey, type PartLink } from './learning';
+import {
+  applyLearnedLinks,
+  contradictionVeto,
+  partLinkId,
+  wordingKey,
+  type PartLink,
+} from './learning';
 import { parseDescription } from './normalise';
 import { resolvePartSides, type PartSide, type PartSideEvidence } from './partSide';
 import { POSITION_TOKENS } from './synonyms';
@@ -108,6 +114,8 @@ export interface PartSuggestion {
    * cautions it had. It's still logged, so later uploads can contradict it.
    */
   learned?: { cautions: string[] };
+  /** Which rule confirmed it (for self-scoring); set on confirmed suggestions. */
+  rule?: string;
   /** ERA description (quotes) or ASA description (catalogue). */
   description?: string;
   tier: MatchTier;
@@ -375,6 +383,10 @@ function scoreSource(
     partNumber,
     source,
     level: cautions.length === 0 ? 'confirmed' : 'possible',
+    rule:
+      cautions.length > 0
+        ? undefined
+        : `${tier === 'vin' ? 'same VIN' : 'same model code + build date'}, exact wording (${source === 'quotes' ? 'your quotes' : 'ASA catalogue'})`,
     cautions,
     description: latest.description,
     tier,
@@ -600,6 +612,21 @@ export function suggestForLines(
       for (const suggestion of suggestions) {
         if (suggestion.level !== 'confirmed' || suggestion.tier === 'vin') continue;
         const veto = variants.veto(suggestion.partNumber);
+        if (!veto) continue;
+        suggestion.level = 'possible';
+        suggestion.cautions.push(veto);
+      }
+    }
+
+    // An upload chose against this part on a nearby build (a miss, or a
+    // hidden candidate not chosen): held back until verifications outweigh it.
+    if (queryModelCode) {
+      for (const suggestion of suggestions) {
+        if (suggestion.level !== 'confirmed' || suggestion.learned) continue;
+        const veto = contradictionVeto(
+          linkById.get(partLinkId(suggestion.partNumber, queryModelCode)),
+          vehicle,
+        );
         if (!veto) continue;
         suggestion.level = 'possible';
         suggestion.cautions.push(veto);

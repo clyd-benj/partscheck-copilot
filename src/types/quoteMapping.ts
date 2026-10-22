@@ -160,6 +160,17 @@ export interface QuoteCaptureResult {
   repairerSuppliedRows: number;
   /** Repairer-supplied values on this quote now paired with a verified number. */
   repairerSuppliedLinked: number;
-  /** Hidden suggestions this quote's upload proved right / chose against (learning.ts). */
-  learning?: { verified: number; nowConfirmed: number; contradicted: number };
+  /**
+   * What this quote's upload showed (learning.ts LearningSummary): self-score
+   * of the confirmed suggestions shown, and hidden suggestions proved right /
+   * chosen against.
+   */
+  learning?: {
+    lines: number;
+    confirmed: number;
+    correct: number;
+    verified: number;
+    nowConfirmed: number;
+    contradicted: number;
+  };
 }
