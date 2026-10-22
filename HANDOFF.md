@@ -601,7 +601,7 @@ npm run build      # tsc -b && vite build -> dist/
 npm run dev        # Vite watch mode with HMR; load dist/ as unpacked, refresh on changes
 npm run lint       # eslint . --max-warnings 0
 npm run typecheck  # tsc -b only
-npm test           # vitest run — 22 files, 292 tests, all currently passing
+npm test           # vitest run — 24 files, 309 tests, all currently passing
 npm run test:watch
 npm run format     # prettier --write .
 ```
@@ -1047,6 +1047,7 @@ sidebar sections, DB v5. Tests: `tests/learning.test.ts`.
   The entry then stores its `outcome`, so reloading an uploaded quote never counts twice; a
   link also keeps one observation per VIN (same VIN uploaded twice counts once). The verifying
   mapping gets `learnedLinkId`. Store `learnedLinks` (id `wording|side|PART|CODE`).
+  *(Superseded by §9.11: links are now per part number + model code, store `partLinks`.)*
 - **Status** (`linkStatusFor`): 1 verification → PARTIAL, hidden. ≥2 verifications from
   different VINs with build months, and verifications − (contradictions inside the verified
   range; undated ones count) ≥ 2 → CONFIRMED, but only for vehicles of that model code built
@@ -1075,3 +1076,82 @@ sidebar sections, DB v5. Tests: `tests/learning.test.ts`.
   12 months; a second VIN confirms in range (2024-09 yes; 2024-10 and 2022-05 no); same VIN
   twice counts once; reload doesn't recount; a contradiction demotes until 3 v 1; NA proves
   nothing; plus pure status checks.
+
+### 9.11 Part links with wording aliases, trim/colour/date variants, self-scoring
+
+Request (2026-10-22), goal restated: once there's plenty of data the user copies confirmed
+numbers without checking; a wrong side, position, generation, trim, colour or build-variant
+part is never acceptable. §9.10 already covered hiding POSSIBLE, the prediction log and
+verification on upload; built on top of it (commits `62093b7`, `42b3164`, `794aadc`,
+`147fa80`):
+
+**Prediction log** entries also carry `classification`, `exteriorColour`, `productionDate`
+(ASA "2021.11.3"), `model`, and `shown` — the confirmed suggestion the sidebar showed first
+(what "copy all" copies) with its `rule`. Lines with unclear wording are logged too (no
+candidates), so they count as quoted lines.
+
+**Part links** (`learning.ts`, store `partLinks`, DB **v6**): one link per (part number, model
+code), id `PART|CODE`, with `verifications`/`contradictions` (one per VIN) and `aliases` —
+each wording + side that led to a verification, with its VINs. Status rules unchanged from
+§9.10 (PARTIAL at 1 VIN; CONFIRMED at ≥2 VINs for that model code within the verified range
+±12 months; in-range contradictions demote until verifications − contradictions ≥ 2).
+`applyLearnedLinks` promotes only when the link is confirmed for the vehicle **and** the line's
+wording + side is an alias, so a new wording of a confirmed part joins after **one**
+verification of its own and does nothing before that. The v6 upgrade merges v5's
+per-wording `learnedLinks` into part links (wordings → aliases) and drops that store
+(`partLinksFromLegacy`); mappings' `learnedLinkId` now holds a part link id (old values
+still work: any value keeps the row out of the usual rules).
+
+**Variants** (`variants.ts` `checkVariants`, applied in `suggestForLines` after the learned
+promotion, before the two-confirmed conflict check). Answers = every quote mapping
+(learned rows included, the open quote excluded) and ASA fitment whose re-parsed wording key
++ side equals the line's, on the query's model code. Two or more part numbers → the wording
+*varies*; each model-code confirmation (not same-VIN) must then fall on its part's side of
+**every** clean split:
+- trim: every answer has an ASA classification and each maps to one part;
+- colour: only for colour variants (same `####A###`/`####AA##` base with different 1–2 letter
+  suffixes, or a colour word in a description); every answer has an exterior colour and each
+  maps to one part;
+- build date: every answer has a full ASA production date (`parseAsaProductionDay`, day
+  precision); in date order each part forms one unbroken run (ties between parts or a part
+  coming back = not clean). The vehicle must be inside its part's run or beyond the first/last
+  run; between runs (the changeover gap) is unknown → nothing. The 12-month window can't
+  reach across, because the split vetoes it.
+- No clean split → never confirmed for that wording + model code ("part number varies on this
+  model (no clean split)"). Vehicle value unknown (e.g. VIN not opened in ASA CAPS yet) →
+  "can't tell" → nothing; the §9.7 refresh recomputes when ASA CAPS captures the VIN.
+- Several clean splits must all agree (deliberately conservative: with few answers, several
+  dimensions split by coincidence). Colour is gated because body-agnostic parts would
+  otherwise "split" by colour on almost any two cars.
+- Tests: `variants.test.ts` — the user's 62022W410P/430P Eclipse Cross FACE,FR BUMPER case
+  (GK1W: 410P 2021-03, 430P 2021-10 and 2024; GL3W separately), trim, colour, no split.
+  Note the §9.10 screenshot case is itself a varies case (5757A787 and 5757A763 both answer
+  "L/H/R DOOR MOULD" on GK1W); its tests now give those cars ASA dates (clean date split),
+  and after an upload picks 5757A787 on a late-2023 build the split breaks and it stays manual.
+  Two older tests changed meaning: a same-trim and another-trim part used to cancel out as a
+  conflict — now the trim split confirms the same-trim one; "dated vs undated" BONNET parts
+  with no clean split are both hidden.
+
+**Self-scoring** (`learnFromUpload`, `scoreTotals`): every log entry without an outcome whose
+line was answered with a part number (NA-only lines aren't scored) gets `outcome.score`:
+`correct` (shown part uploaded), `miss`, or `none` (nothing confirmed), plus `uploaded`,
+`reference`, `eraQuoteNo`. A miss records a contradiction on the shown part's link (VIN
+needed). `contradictionVeto`: a confirmed (not learned) suggestion is held back ("contradicted
+by an upload") while its part link has contradictions from builds within 12 months (undated
+count) and verifications − those < 2; it then shows as possible, gets logged, and can earn
+verifications back. `PartSuggestion.rule` says what confirmed it ("same VIN" / "same model code
++ build date", exact wording, and source; learned: "verified by uploads (part link + wording
+alias)").
+- Popup → ASA CAPS tab → **Suggestion Accuracy** (`SuggestionScoreSection.tsx`, reads
+  `listPredictions()` directly): lines quoted, confirmed (hit rate), correct (accuracy), and
+  the 20 newest misses (quote ref = Reference, else ERA quote no, else draft key; line;
+  model · code · VIN; suggested vs uploaded; rule). Totals are recomputed from the log, so
+  reloads never double-count; outcomes stored by the 4e745e0 build have no `score` and aren't
+  counted.
+- Sidebar "Part Number Capture": "4 of 7 lines confirmed, 4 correct; 2 hidden guesses
+  verified, 1 now confirmed" (+ ", K contradicted" and an amber "N misses, listed in the
+  popup" when non-zero). "Lines" = scored lines of this quote.
+- Tests: `scoring.test.ts` (counts, NA not scored, the miss record, miss → contradiction →
+  held back on the next car, reload, veto lifting at +2).
+- Still not in the export/backup: the prediction log and part links (see §9.10).
+
