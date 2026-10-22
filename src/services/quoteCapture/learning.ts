@@ -37,6 +37,12 @@ export interface PredictionLogEntry {
   side: Side;
   vin?: string;
   modelCode?: string;
+  /** ASA CAPS classification (trim) of the vehicle, if known. */
+  classification?: string;
+  /** ASA CAPS exterior colour code, e.g. "X42A", if known. */
+  exteriorColour?: string;
+  /** ASA CAPS production date as shown there ("2021.11.3"), if known. */
+  productionDate?: string;
   buildMonth?: number;
   candidates: LoggedCandidate[];
   loggedAt: string;

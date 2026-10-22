@@ -24,7 +24,13 @@ let quoteSeq = 0;
 async function eclipseCross(year: number, month: number): Promise<string> {
   const vin = newVin("JMFXDGK1");
   await AsaCapsDatabase.putVehicle(
-    vehicle(vin, { model: "ECLIPSE CROSS", modelCode: "GK1W", productionFrom: `${year}.${month}.1` }),
+    vehicle(vin, {
+      model: "ECLIPSE CROSS",
+      modelCode: "GK1W",
+      classification: "XTHUR8",
+      exteriorColor: "W37",
+      productionFrom: `${year}.${month}.1`,
+    }),
   );
   return vin;
 }
@@ -79,6 +85,9 @@ describe("learning from hidden suggestions", () => {
       side: "LH",
       vin,
       modelCode: "GK1W",
+      classification: "XTHUR8",
+      exteriorColour: "W37",
+      productionDate: "2023.6.1",
       buildMonth: ym(2023, 6),
     });
     expect(entry.candidates.map((c) => [c.partNumber, c.reason]).sort()).toEqual([
